@@ -87,7 +87,7 @@ single entry-point file.
 **Plugin identity.**
 `manifest.json` needs an `id`, `name`, `version` (start at `0.1.0`),
 `minAppVersion`, `description`, and `author`. Per the identity decision in
-`openspec/config.yaml`, the id is `obsidian-git-publisher` and the display
+`openspec/config.yaml`, the id is `obsidian-docs-publisher` and the display
 name is "Git Publisher" — platform-agnostic on purpose, since GitHub and
 Gitea are plausible later and the SOP framing is this team's use case
 rather than the plugin's scope.
@@ -134,5 +134,5 @@ install.
 ## Open Questions
 
 None blocking. Note that the plugin id is explicitly NOT among them — it
-is settled at `obsidian-git-publisher` and treated as fixed from this
+is settled at `obsidian-docs-publisher` and treated as fixed from this
 commit, for the reasons in the Plugin identity decision above.

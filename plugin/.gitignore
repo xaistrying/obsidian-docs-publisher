@@ -1,0 +1,19 @@
+# Build output
+main.js
+main.js.map
+
+# Dependencies
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+
+# Plugin data - holds the access token from platform-config onward
+# Does not exist in this milestone but is ignored now while it's harmless
+# rather than after it contains a token
+data.json

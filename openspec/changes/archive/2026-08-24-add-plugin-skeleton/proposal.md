@@ -38,7 +38,7 @@ change)
 - New plugin project at the repo root (this repository is dedicated to the
   plugin): `manifest.json`, `package.json`, an esbuild build config, a
   TypeScript entry point, and a `.gitignore`. Repository, package, and
-  manifest `id` are all `obsidian-git-publisher`; display name is
+  manifest `id` are all `obsidian-docs-publisher`; display name is
   "Git Publisher". The `.gitignore` covers `data.json` from this first
   commit even though nothing writes it yet — see `design.md`.
 - Depends only on the Obsidian Plugin API and the build tooling
