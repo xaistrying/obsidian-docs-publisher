@@ -37,11 +37,16 @@ context: |
      on the target instance: the default token screen is the newer
      fine-grained flow, which has no `api`-style scope at all — the `api`
      checkbox this whole credentials decision depends on is one click
-     further in, under "Generate legacy token". The settings tab's
-     instructions must name that legacy flow explicitly; "go create a
-     personal access token" is not sufficient
-     guidance on this instance and will hand an author a token that
-     cannot do the job. Includes expiry handling: short-expiry tokens
+     further in, under "Generate legacy token". DECIDED (2026-08-24,
+     superseding the above): the settings tab guides authors through the
+     fine-grained flow instead, per the credentials decision — see
+     Credentials' "Still to verify" below. Exact permission checkboxes
+     are not enumerated in the settings-tab copy (that's handled during
+     onboarding, per the same decision); the copy just points at the
+     fine-grained flow generically. The legacy-flow click-path recorded
+     above is kept as the documented fallback if the deferred
+     self-managed rerun ever turns up a real gap, not deleted outright.
+     Includes expiry handling: short-expiry tokens
      make expiry a certainty rather than an edge case, and it presents as
      every call failing at once for one person. A 401 anywhere in the
      plugin must surface as "Your access has expired — ask your admin to
@@ -279,9 +284,12 @@ context: |
     rather than swallow the error, and retries must be idempotent (check
     whether the branch/MR already exists before redoing a partially
     completed submit).
-  - Credentials: DECIDED — personal access tokens, one per author, `api`
-    scope, short expiry, documented rotation. The plugin authenticates as
-    the person using it, never as a shared identity.
+  - Credentials: DECIDED — personal access tokens, one per author, short
+    expiry, documented rotation. The plugin authenticates as the person
+    using it, never as a shared identity. Token TYPE: fine-grained, not
+    legacy `api` scope — RESOLVED (2026-08-24, provisionally); see the
+    Credentials section below for the spike that settled it and the one
+    deferred, non-blocking item still hanging off that resolution.
     Rejected: (b) a single project access token, and (c) a project access
     token with `author_name`/`author_email` set per commit. Both act as a
     bot user (`project_{id}_bot`), and both fail for the same reason: the
@@ -320,19 +328,41 @@ context: |
     gate the merge on this instance; the protected `main` branch's
     "Allowed to merge" permission is the sole enforcement boundary for
     milestone 7, not one of two checks to reconcile.
-    Still to verify, and unaffected by the above:
+    Still to verify:
       - Token expiry length and the rotation runbook, both implementation
         details for platform-config rather than open architecture.
-      - Whether a fine-grained token could do this job today. If it can,
-        it is the better answer on scope grounds and sidesteps the
-        deprecation risk below entirely. Test whether one token can:
-        create a branch, commit a file, create a merge request, list
-        merge requests, add a note, and merge. Do not assume the answer
-        is no — early beta coverage was partial, but this instance runs
-        19.3.0, well past general availability, so coverage is likely
-        much better than the beta figures suggested. This check is the
-        cheapest route to closing the deprecation risk and should be run
-        before, not after, committing to legacy tokens permanently.
+    Token type (legacy `api` scope vs. fine-grained) — RESOLVED
+    (2026-08-24), provisionally: fine-grained. Context for why this took
+    a spike rather than a guess: fine-grained sidesteps the deprecation
+    risk below entirely if it can do the job, and this instance runs
+    19.3.0, well past general availability, so early-beta partial
+    coverage was not a safe assumption to carry forward untested.
+    A manual spike confirmed it: all six required operations (create a
+    branch, commit a file, create a merge request, list merge requests,
+    add a note, merge) succeeded against a scoped fine-grained token on
+    gitlab.com (`GET /user`, branch+commit via `start_branch`, create
+    merge request, list by `source_branch`, add a note, merge with the
+    `sha` param) — once the token was generated with a "Merge Request:
+    Merge" permission checked. The first attempt omitted it and failed
+    with a named `insufficient_granular_scope` error naming exactly that
+    permission, not a generic 403 — informative in itself: the gap was a
+    missed checkbox on token creation, not a missing capability.
+    Two things remain, neither blocking platform-config:
+      (a) DEFERRED, not blocking. This ran against gitlab.com (SaaS/EE,
+          continuous deployment), not the self-managed CE 19.3.0 target
+          instance, which is the one that actually matters — SaaS's
+          fine-grained rollout is not guaranteed identical to
+          Self-Managed 19.3.0. Rerun against the real instance when
+          convenient; not required before platform-config ships.
+      (b) OWNED OPERATIONALLY, not a plugin design concern. Exact
+          per-token permission selection (which checkboxes, per
+          member/role) is handled during author onboarding by whoever
+          administers the project, not prescribed by settings-tab copy.
+          The settings tab therefore points authors at the fine-grained
+          flow generically, without enumerating exact permission names.
+    Consequence: milestone 2's settings-tab guidance flips from the
+    legacy flow to the fine-grained flow — see milestone 2 above, updated
+    accordingly.
   - KNOWN DEPRECATION RISK on the credentials decision, and the failure
     mode is specifically rotation. Fine-grained tokens exist to replace
     the broad legacy scopes — `api` among them — with granular
@@ -359,8 +389,75 @@ context: |
     Note also that commit authors are matched to GitLab accounts by email
     only — the Commits API returns author name and email but no user id —
     so a wrong email silently renders as an unlinked plain-text name.
-  - Treat plugin data storage as plaintext by default. Flag explicitly
-    before building any token-storage feature.
+    UPDATE (2026-08-24): moot as of the decision above — the project is
+    proceeding on fine-grained tokens from milestone 2 onward, so there
+    is no legacy-token era to migrate off of later, and no enforcement
+    date to watch for. Provisional on the deferred self-managed rerun
+    ((a) in the Credentials section above): if that rerun ever turns up a
+    real gap on the target instance, this risk comes back into play and
+    the fallback is the legacy flow already documented in milestone 2.
+  - Plugin data shape / credential persistence: DECIDED (2026-08-24).
+    Credentials are session-scoped, in-memory only — NEVER written via
+    `saveData()`/`data.json`. Three separate fields, pasted into the
+    settings tab once per Obsidian launch:
+      - `GL_HOST` — the GitLab instance base URL
+      - `GL_PROJECT` — the project namespace path (e.g.
+        `team/sop-knowledge-base`), DECIDED over a numeric ID for
+        readability — GitLab's REST API accepts a URL-encoded path
+        directly as the `:id` param, so no "resolve to numeric ID"
+        round-trip is needed.
+      - `GL_TOKEN` — the personal/fine-grained access token
+    Held in a plugin-instance field populated by the settings tab's form,
+    not re-requested merely for reopening that tab within the same
+    running session — cleared only on Obsidian restart or plugin
+    reload/disable-enable. A "Test connection" button in the settings tab
+    fires the identity check (`GET /user`) against whatever is currently
+    held, before anything downstream can rely on it.
+    This RESOLVES the `tokenStorageMode` question raised earlier by
+    removing it rather than answering it: no persisted secret means no
+    plaintext-vs-`safeStorage` decision and no vault-sync-replication
+    exposure to weigh.
+    The `GL_*` naming matches this repo's dev-time `.env` convention for
+    readability, but this is NOT a dotenv load — Obsidian has no dotenv
+    runtime, and hand-editing a text file would contradict the product
+    thesis. These are in-memory JS fields populated by form inputs,
+    nothing else; do not let the naming similarity suggest the shipped
+    plugin reads `plugin/.env`.
+    Consequence: "Connected as ..." must be re-established at least once
+    per Obsidian launch, and every submit/list/etc. action depends on
+    these three fields being populated for that session. An action
+    attempted before pasting them (or after a restart with nothing
+    pasted yet) must fail clearly and point at the settings tab — the
+    same surface the 401-expiry failure mode above already points at.
+  - "Test connection" / git-publishing boundary: DECIDED (2026-08-24).
+    The button calls into a minimal git-publishing client — `GET /user`
+    for identity, plus `GET /projects/:id/members/all/:user_id` to read
+    the author's `access_level` (Guest/Reporter/Developer/Maintainer/
+    Owner) on `GL_PROJECT` specifically. Both results are cached on
+    `connectedAs` (username, name, accessLevel, verifiedAt) for the
+    settings tab to display — e.g. "Connected as Trai Pham — Developer
+    access." This keeps the capability boundary intact (git-publishing
+    still owns 100% of HTTP calls; platform-config's button just calls
+    into it) and the `access_level` lookup is not a throwaway extra —
+    it's half of what milestone 7's protected-branch/"Allowed to merge"
+    gating needs (the user's own access_level), so this is where that
+    half is first exercised, not invented fresh later. The other half —
+    which access levels the protected `main` branch actually allows to
+    merge — is a separate call (`GET /projects/:id/protected_branches/
+    main`) that milestone 7 still has to add; "Test connection" does not
+    fetch it, so don't treat this lookup as already answering milestone
+    7's gating question on its own.
+    CAVEAT: this surfaces the author's project ROLE, not their token's
+    exact fine-grained permission grants — GitLab has no API to
+    introspect which permission checkboxes a token was created with, so
+    "Test connection" cannot literally list the token's permissions, only
+    prove which ones work by using them (as the manual spike did) or
+    report the person's role as a proxy. Don't let settings-tab copy
+    promise more than the role display actually shows.
+  - Treat plugin data storage (submission-tracking state, once that
+    capability lands) as plaintext by default. Flag explicitly before
+    persisting anything else. Does not apply to credentials, which are
+    session-only per the decision above and never reach `data.json`.
   - UI placement: panel opens in the RIGHT sidebar (Obsidian convention for
     contextual tools; the left sidebar is for vault navigation). Two entry
     points, both calling the same activation path: a ribbon icon and a
@@ -393,6 +490,37 @@ context: |
     two different lifecycles on two different axes, and doc-authoring and
     submission-tracking must not both be built against a field of the
     same name meaning different things.
+  - Project and plugin identity: the repository, the npm package, and the
+    manifest `id` are all `obsidian-docs-publisher`. The display name is
+    "Docs Publisher". Chosen to be platform-agnostic — not `gitlab-*`,
+    because GitHub and Gitea are plausible later, and not `sop-*`, because
+    the SOP framing is this team's use case rather than the plugin's
+    scope. It also avoids confusion with the existing community plugin
+    "Obsidian Github Publisher", which a `git-publisher` name would have
+    sat awkwardly close to. Obsidian's registry strips the `obsidian-`
+    prefix on display, so the repository keeps the full name while the
+    store shows "Docs Publisher".
+    The manifest `id` is NOT a free-to-change label. Obsidian keys plugin
+    enablement off it and loads plugin data from the plugin's own folder,
+    conventionally named for the id, so changing it after distribution
+    makes Obsidian treat it as a different plugin: it needs re-enabling,
+    and data saved under the old identity is not picked up. From
+    platform-config onward that data holds each author's submission state
+    — NOT an access token; credentials are session-only per the
+    credentials/storage decision above and never reach this file. Treat
+    the id as fixed from the first commit.
+  - `.gitignore` MUST include `data.json` from the very first commit, and
+    the entry must carry a comment saying why. Obsidian plugins are
+    normally developed inside a vault's `.obsidian/plugins/<id>/` folder,
+    which makes the repository root and the plugin's runtime folder the
+    same directory, so `data.json` is generated in the working tree. From
+    platform-config it holds submission-tracking state — not a live
+    access token; credentials are session-only per the credentials/
+    storage decision above and never reach this file. The entry is kept
+    regardless: local plugin data has no business in git either way,
+    token or not. It does not exist during plugin-shell, which is
+    precisely why it gets forgotten — `.gitignore` is written once and
+    rarely revisited.
   - Tech: TypeScript, Obsidian Plugin API, esbuild bundler, no UI framework.
 
 # Per-artifact rules — enforced habits agreed during exploration.
