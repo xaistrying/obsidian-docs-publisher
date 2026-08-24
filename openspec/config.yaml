@@ -1,0 +1,437 @@
+schema: spec-driven
+
+# Project context — read by OpenSpec whenever it generates a proposal,
+# design, spec, or tasks file for this repo.
+context: |
+  Obsidian plugin that lets non-technical (L1/L2) staff contribute to a
+  GitLab-backed SOP knowledge base without touching git directly.
+
+  PRODUCT THESIS
+  The plugin's reason to exist is that authors never learn git. Any design
+  that leaks git mechanics into the author's experience has failed its
+  purpose, even if it works technically. See the vocabulary rule below.
+
+  CAPABILITIES
+  - plugin-shell — plugin lifecycle, sidebar view registration, ribbon
+    icon, command palette entry.
+  - platform-config — settings tab, credential storage, connection
+    validation.
+  - doc-authoring — new note creation, template, front matter, vault paths.
+  - submission-tracking — submission state machine and its persistence.
+  - git-publishing — ALL remote API interaction. Confined here so a second
+    platform (GitHub, Gitea) can be added additively rather than surgically.
+    Nothing outside this capability may import an HTTP client or know a
+    platform's endpoint shapes.
+
+  MILESTONES (v1 roadmap — a sequence, not a schedule; reorder as reality
+  intervenes, this list is expected to change)
+  Each milestone is one proposal: a vertical slice a person can click and
+  observe, per the proposal rule below. Numbering shows the dependency
+  order, not a fixed calendar.
+  1. Plugin shell — sidebar view registers and opens via a ribbon icon and
+     a command palette entry; empty container. Proves the shell before
+     anything else is built to depend on it.
+  2. Connect to GitLab — settings tab: paste a personal access token and
+     project URL, "Test connection" calls the API and shows who it
+     connected as. Nothing downstream can be real without this. Confirmed
+     on the target instance: the default token screen is the newer
+     fine-grained flow, which has no `api`-style scope at all — the `api`
+     checkbox this whole credentials decision depends on is one click
+     further in, under "Generate legacy token". The settings tab's
+     instructions must name that legacy flow explicitly; "go create a
+     personal access token" is not sufficient
+     guidance on this instance and will hand an author a token that
+     cannot do the job. Includes expiry handling: short-expiry tokens
+     make expiry a certainty rather than an edge case, and it presents as
+     every call failing at once for one person. A 401 anywhere in the
+     plugin must surface as "Your access has expired — ask your admin to
+     set it up again", not as a generic failure, and must point at the
+     settings tab.
+  3. Create a new SOP — "New SOP" creates a note from template with the
+     front matter contract pre-filled (`doc_id` generated, required
+     fields present but empty) and opens it. No GitLab call yet.
+     Milestones 2 and 3 don't depend on each other — either can go first.
+  4. Submit for review — the first end-to-end slice: click Submit, the
+     plugin creates the branch, commits, and opens the merge request; the
+     note shows "Waiting for review". Blocked on deciding the `owner`
+     field question, since that decision shapes the front matter contract
+     this milestone ships against.
+  5. See your status — sidebar lists the author's own docs with their
+     current state, resolved via reconciliation. Read-only from the
+     author's point of view, but this is where the READ path is built:
+     milestone 4 only writes, so this milestone makes the first
+     `GET /merge_requests` call and needs a new client method for it.
+     Do not scope it as though the remote surface already exists.
+  6. Send updates — resubmit after "Changes requested": edit, click Send
+     updates, it commits to the existing branch/MR and flips back to
+     pending. NOT blocked: this path has an open merge request and a live
+     branch, which the revisions rule already settles. It does depend on
+     `last_commit_id`, since this is the first update to an existing file.
+     Resubmitting after a document was NOT accepted is a different path —
+     closed merge request, stale branch — and belongs to whichever
+     milestone takes the branch-recreation design question, not here.
+  —. Resubmit after "Not accepted" — UNNUMBERED PLACEHOLDER, blocked on
+     the branch-recreation design question. Deferred, not dropped: a
+     rejected author currently has no way back in, so this must ship
+     before real use, and it is not in the out-of-scope list below.
+     Whichever fork that question settles on, the author-facing outcome
+     is the same and is what closes this milestone: a document showing
+     "Not accepted" offers one action that gets the author submitting
+     again, and the stale branch from the rejected cycle does not surface
+     to them or block them. Depends on milestone 5 reporting closed
+     merge requests correctly (hence the all-states reconciliation
+     query) and on milestone 6's update path. Give it a number once the
+     design question is answered — it likely lands before review-and-
+     merge, since a stuck author is a worse problem than a reviewer
+     without a Merge button.
+  7. Review and merge — reviewer-facing pending list and a Merge action,
+     gated by the real protected-branch permission check, never a role
+     label. UNBLOCKED on the tier question: confirmed GitLab CE, so
+     required approvals can never gate the merge here — the protected
+     `main` branch's "Allowed to merge" permission is the only real
+     control the Merge action can rely on. Still open: the actual
+     "Allowed to merge" role list for the target project has not been
+     checked yet — the mechanism is settled, that specific value is not.
+     Also blocked on the self-merge governance question (see architecture
+     decisions): whether an author merging their own document is
+     accepted as a norm or excluded by the plugin, since GitLab CE
+     cannot enforce that choice either way — the Merge action's behavior
+     differs depending on which answer this milestone ships with. Does
+     NOT affect "Changes requested": that
+     state is derived from merge request comments, which behave
+     identically on every tier and never gate a merge. Reviewers editing
+     an author's submission is out of scope; the escape hatch is an
+     "Open in GitLab" link.
+  Not yet milestoned, and not accidentally: multi-platform support (out of
+  scope per git-publishing's capability boundary, not merely deferred),
+  offline queueing (explicit non-goal), and anything beyond
+  one-note-one-branch-one-merge-request. This list is for work that is
+  genuinely OUT OF SCOPE. Work that is merely blocked or deferred belongs
+  in the numbered sequence above, as a placeholder if it cannot be
+  ordered yet — do not park it here, because that reads as dropped.
+  Anything that appears in neither place is an oversight, not a decision:
+  if a milestone hands work off to "some later milestone", check that a
+  milestone actually claims it before considering that milestone done.
+
+  ARCHITECTURE DECISIONS
+  - Source of truth: GitLab, protected `main` branch.
+  - Plugin talks to GitLab entirely via its REST API — no local git binary,
+    no `git init`, no SSH keys, no `.git` folder in the vault ever. Every
+    "submit" action is 1-2 HTTP calls (create branch + commit via
+    `POST /repository/commits` with `start_branch`, then a separate
+    `POST /merge_requests`) — not local git commands. Subsequent revisions
+    commit to the existing branch, so they omit `start_branch`.
+  - Deliberately avoiding local git also sidesteps vault-sync conflicts
+    (Obsidian Sync / Dropbox / iCloud fighting with a local `.git` folder).
+  - Submission state is tracked in plugin data, not derived from git.
+    Branches are auto-deleted on merge, so branch existence cannot answer
+    "where is my document right now." The remote merge-request state is the
+    source of truth; plugin data is a local cache of it, reconciled on
+    refresh. States: unsubmitted, pending, changes-requested, published,
+    closed. Deliberately NOT named "draft" — GitLab has its own Draft
+    merge request feature meaning a real MR marked not-ready, which is a
+    different thing. Here `unsubmitted` means no branch and no merge
+    request exist yet; the author-facing label is "Not submitted yet".
+  - Submission state lives ONLY in plugin data, never in the note's front
+    matter. Writing it into front matter would commit workflow state into
+    the repository, produce a diff on every review round, and leave a
+    stale value baked into `main` after merge.
+  - OPEN DESIGN QUESTION for submission-tracking: what happens when the
+    plugin needs to create `doc/<doc_id>` and something is already in the
+    way. Two cases, deliberately recorded together because they share a
+    trigger and a reconciliation query, and answering one without the
+    other will produce inconsistent behaviour:
+      1. Rejected, same cycle. The merge request was closed without
+         merging, and GitLab does not auto-delete the source branch on
+         close, so the branch is still alive with the old content on it.
+         Forks: reopen the same merge request — preserves the rejection
+         discussion, but drags it along, and only works while the branch
+         survives — or treat closed as terminal and start fresh, which
+         gives cleaner history but leaves a stale branch to clean up.
+      2. Published, new cycle. The merge request merged, the branch was
+         auto-deleted, and months later the author revises the document
+         and submits again. Nothing is in the way on the remote, but the
+         name `doc/<doc_id>` now collides with the history of one or more
+         already-merged merge requests. The new branch must be cut from
+         current `main`, not from anything cached locally.
+    Whichever forks are chosen, the design must state who deletes an
+    abandoned branch, and must not assume `doc_id` maps to a single merge
+    request over the document's lifetime.
+  - Pre-submit drafts have no versioning of their own beyond Obsidian's
+    built-in File Recovery core plugin — do not build custom local
+    versioning. Real version history starts at the first "submit."
+  - Model: one note = one branch = one merge request (v1). Multi-doc MRs
+    are an explicit non-goal for now.
+  - Branch naming: `doc/<doc_id>`, where `doc_id` is a short opaque
+    identifier generated once when the note is created and written to its
+    front matter. The branch name is derived from nothing that can drift.
+    The human-readable name lives in the merge request TITLE, which is
+    what reviewers read in GitLab's UI and which can be updated freely
+    when a note is retitled, without touching the branch.
+    Rejected: deriving the branch name from the note's title or path.
+    Obsidian users rename notes and move them between folders routinely,
+    and either scheme stops reproducing the moment they do. Keeping the
+    title out of ref names also sidesteps git's ref restrictions (spaces
+    and `~^:?*[\` are illegal) and the ASCII-folding that Vietnamese
+    titles with diacritics would otherwise require — do not "improve"
+    this back into readable slugs.
+  - Branch names are reused across a document's lifetime, so `doc_id` to
+    merge request is one-to-MANY, not one-to-one. `doc_id` is immutable
+    but `doc/<doc_id>` is transient: created at submit, deleted on merge,
+    then recreated with the identical name the next time that document is
+    revised. A living SOP is expected to go through repeated cycles —
+    that is what `lifecycle` exists for — so after the first revision
+    cycle a query by `source_branch` returns several merge requests: old
+    merged ones, and possibly a current open one.
+  - Reconciliation: a note whose local pointer is missing is reconnected
+    by reading `doc_id` from its front matter and querying merge requests
+    with `source_branch = doc/<doc_id>`, ALL states, newest first. Resolve
+    the result as follows:
+      - An open merge request wins if one exists. At most one can, since
+        GitLab refuses a second open merge request from the same source
+        and target branch, so this match is unambiguous.
+      - Otherwise the most recent merge request determines the state:
+        merged means published and the branch is already gone; closed
+        means not accepted and the branch may still exist.
+      - No merge requests at all means the note has never been submitted.
+    Do NOT filter the query to open merge requests only. That returns
+    nothing for a rejected document, so reconciliation would report it as
+    never submitted; the author would then submit, and the call would
+    fail because the branch from the rejected cycle is still there.
+    Because `doc_id` is committed with the note, a file pulled fresh from
+    `main` on a different machine reconciles with no local state at all.
+    This matters because plugin data is not reliably synced and does not
+    survive a plugin reinstall or a vault restored from backup. Reconcile
+    by listing merge requests once and matching every orphan against that
+    result locally — one call total, not one per note.
+  - `doc_id` in front matter is NOT a contradiction of the rule against
+    storing submission state there. That rule bans values that change
+    every review round and go stale in `main`. `doc_id` is immutable
+    identity: written once at creation, never updated, no diff noise.
+  - Duplicating a note in Obsidian copies its front matter, so two notes
+    can claim the same `doc_id`. The plugin must detect a collision and
+    refuse to submit rather than silently commit two files to one branch.
+  - Revisions reuse the same branch and the same merge request. A review
+    round never creates a second merge request.
+  - One writer per branch. Reviewers comment; the author edits. Reviewers
+    editing an in-flight submission from inside the plugin is OUT OF SCOPE
+    for v1 — not merely deferred. Git permits it (the branch is in the
+    same project and unprotected, so any Developer may push, and the merge
+    request updates itself), but it breaks three things here:
+      1. The reviewer's vault does not hold the author's in-flight
+         version — only whatever is in `main`, or nothing. Editing would
+         require pulling branch content into their vault, producing a
+         second local note carrying the same `doc_id`, which the
+         collision rule above already requires the plugin to refuse.
+      2. Lost updates. The commit API sends whole file content, not a
+         diff, so a reviewer's fix is silently reverted the next time the
+         author submits from their now-stale local copy. No conflict is
+         raised. The author's copy is guaranteed stale after any reviewer
+         edit, so this is the normal case, not an edge case.
+      3. On Premium/Ultimate, "prevent approvals by users who add
+         commits" disqualifies a reviewer who edits from then approving.
+         With few reviewers this can leave a document unapprovable while
+         someone is away.
+    The supported path for "it is one typo, let me just fix it" is an
+    "Open in GitLab" link to the Web IDE, which handles the branch, the
+    concurrency, and the vault problem already. Reviewers are more
+    technical than authors by definition, so this is an acceptable
+    handoff for them in a way it would not be for authors.
+  - Every update to an existing file MUST send `last_commit_id` so GitLab
+    rejects a write based on a stale read, rather than silently
+    overwriting. This is required even with reviewer editing out of scope:
+    the same author on two machines, or a note restored from backup, can
+    produce a stale local copy. Losing someone's work silently is worse
+    than failing their submit, so the write must fail and the author must
+    be told the document changed since they last opened it.
+  - Whether the Merge action is shown is decided solely by the protected
+    `main` branch's merge permissions for the current user — never by a
+    fixed role-name mapping. Typically this tracks GitLab access_level
+    (Developer = contributor, Maintainer/Owner = reviewer/merger), but
+    that is just the common case, not the rule: if a project's
+    protected-branch settings ever allow a different access level to
+    merge, the plugin follows that, not the label. GitLab itself is
+    still the real enforcement boundary — the plugin's UI gating is
+    just UX, not a substitute for checking the permission itself.
+  - Self-merge is unpreventable server-side on this instance, and that
+    changes what the plugin's UI gating is for. CE has no approval rules
+    at all, so nothing stops whoever holds merge rights from merging
+    their own document — and here the L2 both authors and reviews.
+    OPEN GOVERNANCE QUESTION, needed by milestone 7: either authors keep
+    merge rights and self-merge is accepted as a social norm, or the
+    Leader is the sole merger and the team accepts a bottleneck whenever
+    they are away. Neither is wrong; the design must pick one rather than
+    inherit it by accident from whatever the current membership happens
+    to be.
+    Note the interaction with the rule above. "UI gating is just UX" is
+    still true of merge PERMISSION, which GitLab enforces. It is NOT true
+    of self-merge, which GitLab cannot enforce on CE at all. If the
+    plugin declines to offer Merge on a document the current user
+    authored, that check is the only one that exists anywhere in the
+    system — so it is load-bearing despite living in the UI, and must not
+    later be removed as redundant with GitLab.
+  - CODEOWNERS is a Premium feature and therefore unavailable here.
+    Anything that would have relied on automatic reviewer assignment by
+    folder needs another mechanism.
+  - No offline submit queue for v1: authoring is always local/offline-safe
+    already (plain file save), and "Submit for review" is a deliberate,
+    in-the-moment click — it must fail loudly on network/API failure
+    rather than swallow the error, and retries must be idempotent (check
+    whether the branch/MR already exists before redoing a partially
+    completed submit).
+  - Credentials: DECIDED — personal access tokens, one per author, `api`
+    scope, short expiry, documented rotation. The plugin authenticates as
+    the person using it, never as a shared identity.
+    Rejected: (b) a single project access token, and (c) a project access
+    token with `author_name`/`author_email` set per commit. Both act as a
+    bot user (`project_{id}_bot`), and both fail for the same reason: the
+    merge request's author field is tied to the authenticating identity
+    and cannot be set, so every submission would be authored by the bot
+    regardless of who wrote it. Commit signing is irrelevant to this —
+    signing only constrains option (c)'s commit-author spoofing, and says
+    nothing about who owns the merge request. So the decision does not
+    depend on the signing check.
+    Two independent reasons, whichever applies to the target tier:
+      - Premium/Ultimate: the "prevent approval by author" setting keys on
+        the merge request author. With the bot as author for everyone, the
+        rule never fires for anyone who both authors and holds approval
+        rights — they could approve their own document and GitLab would
+        not object. Under personal tokens it fires automatically, for
+        whoever that turns out to be.
+      - Free: that setting does not exist (approval rules are Premium+;
+        on Free any Developer may approve and approvals never block a
+        merge), so the hole is not bot-specific. Personal tokens still win
+        on audit trail and revocation granularity — a shared token makes it
+        impossible to attribute a submission to a person, and offboarding
+        one author would force a rotation for everyone. CONFIRMED as the
+        applicable branch — see below.
+    Confirmed: the target instance is GitLab Community Edition (CE)
+    v19.3.0, not Enterprise Edition — checked via the instance's
+    Help/version page. The version matters because several decisions in
+    this file turn on version-specific behaviour (`detailed_merge_status`
+    from 15.6, fine-grained token enforcement from 18.11 and generally
+    available on Self-Managed at 19.2) — 19.3.0 post-dates all of them,
+    which is exactly why the instance already defaults to the
+    fine-grained token flow rather than it being merely implied. CE ships
+    without Premium/Ultimate
+    features regardless of license, so this is a structural fact of the
+    edition rather than a subscription toggle — it would only change if
+    the org migrated to EE. Consequence: required approvals can never
+    gate the merge on this instance; the protected `main` branch's
+    "Allowed to merge" permission is the sole enforcement boundary for
+    milestone 7, not one of two checks to reconcile.
+    Still to verify, and unaffected by the above:
+      - Token expiry length and the rotation runbook, both implementation
+        details for platform-config rather than open architecture.
+      - Whether a fine-grained token could do this job today. If it can,
+        it is the better answer on scope grounds and sidesteps the
+        deprecation risk below entirely. Test whether one token can:
+        create a branch, commit a file, create a merge request, list
+        merge requests, add a note, and merge. Do not assume the answer
+        is no — early beta coverage was partial, but this instance runs
+        19.3.0, well past general availability, so coverage is likely
+        much better than the beta figures suggested. This check is the
+        cheapest route to closing the deprecation risk and should be run
+        before, not after, committing to legacy tokens permanently.
+  - KNOWN DEPRECATION RISK on the credentials decision, and the failure
+    mode is specifically rotation. Fine-grained tokens exist to replace
+    the broad legacy scopes — `api` among them — with granular
+    permissions scoped to particular groups and projects. Enforcement was
+    introduced in 18.11 behind feature flags and became generally
+    available on Self-Managed in 19.2. THIS INSTANCE IS 19.3.0, so it is
+    past both: enforcement is not approaching, it is available to any
+    administrator today and waits only on a date being set. Do not read
+    this as a future concern.
+    On Self-Managed the switch is instance-wide: once an administrator
+    sets an enforcement date, users can no longer CREATE OR ROTATE legacy
+    personal access tokens, while existing legacy tokens keep working
+    until they expire.
+    Consequence for this project: the break is not "everything stops one
+    morning". Authors' tokens keep working, then expire, and cannot be
+    renewed — and short expiry with routine rotation is the whole
+    credentials model, so the operation that breaks is the one this
+    design leans on hardest. Someone must own watching for that
+    enforcement date, and the fine-grained coverage question above should
+    be settled before it arrives rather than after. Note the risk is
+    asymmetric: adopting fine-grained tokens early costs a one-off
+    migration, whereas being caught by enforcement costs every author
+    their access with no rotation path back.
+    Note also that commit authors are matched to GitLab accounts by email
+    only — the Commits API returns author name and email but no user id —
+    so a wrong email silently renders as an unlinked plain-text name.
+  - Treat plugin data storage as plaintext by default. Flag explicitly
+    before building any token-storage feature.
+  - UI placement: panel opens in the RIGHT sidebar (Obsidian convention for
+    contextual tools; the left sidebar is for vault navigation). Two entry
+    points, both calling the same activation path: a ribbon icon and a
+    command palette command.
+  - Front matter contract for authored notes: `doc_id`, `title`,
+    `category`, `lifecycle`, `created`, `last_reviewed`, and possibly
+    `owner` (see below). Required fields must be present and non-empty
+    before a note can be submitted; validation happens in the plugin with
+    an inline prompt, not as a CI failure after the fact. `doc_id` is
+    plugin-generated and immutable — the author never edits it.
+  - `owner` is an OPEN QUESTION scoped to doc-authoring, not blocking.
+    Under personal access tokens GitLab already records who authored every
+    commit and every merge request, server-side and unspoofable, so a
+    hand-typed `owner` is a second and weaker copy of that record — and it
+    can disagree with the real one. The question doc-authoring must answer
+    is whether the field earns its place at all, rather than reading
+    authorship from GitLab. The strongest case for keeping it is a
+    reading-side one: someone browsing a published document should not
+    have to open GitLab to see who owns it. That case should be made
+    explicitly if the field survives; it should not be inherited by
+    default from the era when it was the only attribution available. If
+    kept, it must be autofilled from the authenticated identity at
+    creation — a hand-typed version is the only variant that can lie.
+  - `lifecycle` is EDITORIAL, not workflow: `active`, `deprecated`,
+    `superseded`. It describes the standing of a published document and a
+    published document keeps moving through it long after any merge
+    request is closed. The author owns this field and edits it by hand;
+    the plugin never writes it. It is deliberately not called `status`,
+    because that word was ambiguous against the submission states above —
+    two different lifecycles on two different axes, and doc-authoring and
+    submission-tracking must not both be built against a field of the
+    same name meaning different things.
+  - Tech: TypeScript, Obsidian Plugin API, esbuild bundler, no UI framework.
+
+# Per-artifact rules — enforced habits agreed during exploration.
+rules:
+  proposal:
+    - >-
+        Scope to a single, minimal increment — no bundling multiple
+        behaviors into one change. Registering an empty sidebar view and
+        wiring up submission are separate proposals.
+    - >-
+        Explicitly list what is deferred to a later proposal.
+    - >-
+        Each increment must be a vertical slice that produces something a
+        person can click and observe. Do not propose a change that builds an
+        API client, data layer, or abstraction with no user-visible surface
+        calling it.
+  design:
+    - >-
+        Remote API interaction belongs to the git-publishing capability and
+        nowhere else. If a design places an HTTP call or a platform-specific
+        payload shape outside that capability, say so and relocate it.
+    - >-
+        Prefer the boring option. This is a four-person internal tool; call
+        out when a design is speculative generality.
+  specs:
+    - >-
+        User-facing strings must never contain the words branch, commit,
+        merge request, MR, conflict, or main. Scenarios and acceptance
+        criteria must be written in author-facing vocabulary instead: Submit
+        for review, Send updates, Waiting for review, Changes requested,
+        Published, Not accepted. Internal identifiers, code, and API
+        documentation are exempt.
+    - >-
+        Every failure mode a scenario introduces must specify the exact
+        message the author sees, in that same vocabulary. Shows an error is
+        not an acceptance criterion.
+  tasks:
+    - >-
+        Prefer the smallest set of tasks that produces something demoable.
+    - >-
+        State the observable check that closes the change — what to click
+        and what should happen — not just the code that must exist.
