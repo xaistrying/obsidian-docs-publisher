@@ -1,4 +1,7 @@
-import { App, Plugin, PluginSettingTab, Setting, ItemView, WorkspaceLeaf } from 'obsidian';
+import { Plugin, ItemView, WorkspaceLeaf } from 'obsidian';
+import type { ConnectionDetails } from './git-publishing/gitlab-client';
+import { createEmptyConnectionDetails } from './platform-config/connection';
+import { ConnectionSettingTab } from './platform-config/settings-tab';
 
 const VIEW_TYPE = 'docs-publisher-view';
 
@@ -32,6 +35,11 @@ class DocsPublisherView extends ItemView {
 }
 
 class DocsPublisherPlugin extends Plugin {
+	// Session-scoped connection details. Deliberately never persisted: no
+	// saveData call goes anywhere near these, so they are empty again on the
+	// next launch and no token ever lands in a synced file.
+	readonly connection: ConnectionDetails = createEmptyConnectionDetails();
+
 	private viewActivating = false;
 
 	async onload(): Promise<void> {
@@ -39,6 +47,9 @@ class DocsPublisherPlugin extends Plugin {
 
 		// Register the custom view
 		this.registerView(VIEW_TYPE, (leaf: WorkspaceLeaf) => new DocsPublisherView(leaf));
+
+		// Add the settings tab for the GitLab connection details
+		this.addSettingTab(new ConnectionSettingTab(this.app, this));
 
 		// Add ribbon icon
 		this.addRibbonIcon('git-branch', 'Open Docs Publisher', () => {
