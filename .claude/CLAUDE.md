@@ -8,3 +8,18 @@ In repositories indexed by CodeGraph (a `.codegraph/` directory exists at the re
 
 If there is no `.codegraph/` directory, skip CodeGraph entirely — indexing is the user's decision.
 <!-- CODEGRAPH_END -->
+
+## Project reference docs
+
+`docs/` holds verified background on the platform this plugin targets. Read the
+relevant doc BEFORE designing or implementing against its subject — these exist
+so the facts are looked up once, not re-derived or guessed per session.
+
+- `docs/gitlab-roles.md` — GitLab access levels and what each can actually do
+  here; the three independent permission gates; why a role is an optimistic
+  predictor and never proof a call will succeed. Read before anything that
+  shapes UI by role or gates an action on permissions.
+
+`openspec/config.yaml` lists these under REFERENCE DOCS and is the authority on
+project decisions; `docs/` carries the supporting detail. If a fact appears in
+both and they disagree, that is a bug — say so rather than picking one.

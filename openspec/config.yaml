@@ -23,6 +23,24 @@ context: |
     Nothing outside this capability may import an HTTP client or know a
     platform's endpoint shapes.
 
+  REFERENCE DOCS (`docs/`)
+  Long-form reference that would bloat this file lives in `docs/`. These
+  are not specs and not proposals — they are verified background an agent
+  needs before designing against the platform. Read the relevant one
+  BEFORE writing a design or spec that touches its subject, rather than
+  re-deriving the facts or guessing.
+  - `docs/gitlab-roles.md` — GitLab access levels (0/10/15/20/30/40/50),
+    what each can do for this plugin's operations on the target CE 19.3.0
+    instance, and the three independent permission gates (project role,
+    credential permissions, protected-branch merge rights). Required
+    reading for anything that shapes UI by role, and for milestone 7's
+    gating. Records the load-bearing distinction that a role is an
+    optimistic predictor, never proof a call will succeed.
+  When a decision in this file turns on a fact recorded in `docs/`, cite
+  the doc rather than restating the fact — one copy, so the two cannot
+  drift apart. Add a new doc when a subject needs more than a paragraph
+  here, and list it above; an unlisted doc will not be found.
+
   MILESTONES (v1 roadmap — a sequence, not a schedule; reorder as reality
   intervenes, this list is expected to change)
   Each milestone is one proposal: a vertical slice a person can click and
@@ -429,13 +447,54 @@ context: |
     attempted before pasting them (or after a restart with nothing
     pasted yet) must fail clearly and point at the settings tab — the
     same surface the 401-expiry failure mode above already points at.
+    OPEN SPIKE (raised 2026-08-26), NOT a reversal. The decision above
+    stands and remains in force until this spike says otherwise; do not
+    build against `secretStorage` before it is answered.
+    Obsidian's own API gained `App.secretStorage` in 1.11.4 —
+    `setSecret(id, secret)`, `getSecret(id)`, `listSecrets()` — confirmed
+    present in the `obsidian@1.13.1` typings this project builds on. It
+    did not exist when the decision above was framed, and it matters
+    because the decision resolved the storage question by removing it:
+    the two objections recorded above are plaintext-vs-`safeStorage` and
+    vault-sync replication, and BOTH are aimed at storing a secret inside
+    the vault. A first-class secret API is a third option neither
+    objection reaches, so "no persisted secret" is no longer the only way
+    to avoid them.
+    What is at stake is not tidiness. Session-only credentials mean the
+    sidebar panel's not-connected state is seen on EVERY launch by EVERY
+    user, permanently — it is the daily first impression of the plugin,
+    not an edge case. If credentials can persist safely, that state
+    becomes first-run-only and the everyday experience is a different
+    product.
+    Three unknowns, EACH of which disqualifies the option on its own if
+    it goes the wrong way. All three must be answered before adopting:
+      1. At-rest guarantees are UNDOCUMENTED. The API reference page
+         lists the three method signatures and states nothing about
+         encryption, OS keychain backing, or where the data lands.
+         Storing an access credential somewhere with unstated at-rest
+         guarantees is strictly worse than the current answer, not
+         better. Do not assume it wraps Electron `safeStorage` because
+         the name suggests it.
+      2. Sync behaviour unknown. If secrets replicate between devices,
+         the vault-sync exposure the decision above avoided returns
+         intact, and the option collapses.
+      3. Version and platform reach. The manifest currently declares
+         `minAppVersion: 0.15.0` and `isDesktopOnly: false`. Adopting
+         this forces a bump to at least 1.11.4, and mobile availability
+         is unstated — on a platform with no OS keychain access the
+         guarantee may differ from desktop even if the API is present.
+    Owner: unassigned. If this is still unanswered when credential
+    handling is next touched, answer it then rather than deferring
+    again — the cost of adopting it later is one migration, whereas the
+    cost of never checking is having shipped the daily re-entry burden
+    on an assumption that had already stopped being true.
   - "Test connection" / git-publishing boundary: DECIDED (2026-08-24).
     The button calls into a minimal git-publishing client — `GET /user`
     for identity, plus `GET /projects/:id/members/all/:user_id` to read
     the author's `access_level` (Guest/Reporter/Developer/Maintainer/
     Owner) on `GL_PROJECT` specifically. Both results are cached on
     `connectedAs` (username, name, accessLevel, verifiedAt) for the
-    settings tab to display — e.g. "Connected as Trai Pham — Developer
+    settings tab to display — e.g. "Connected as Xaistrying — Developer
     access." This keeps the capability boundary intact (git-publishing
     still owns 100% of HTTP calls; platform-config's button just calls
     into it) and the `access_level` lookup is not a throwaway extra —
@@ -547,12 +606,43 @@ rules:
         out when a design is speculative generality.
   specs:
     - >-
-        User-facing strings must never contain the words branch, commit,
-        merge request, MR, conflict, or main. Scenarios and acceptance
-        criteria must be written in author-facing vocabulary instead: Submit
-        for review, Send updates, Waiting for review, Changes requested,
-        Published, Not accepted. Internal identifiers, code, and API
-        documentation are exempt.
+        AMENDED 2026-08-26. The git-vocabulary ban is scoped BY AUDIENCE,
+        not applied to every string in the plugin. It previously read "user-
+        facing strings must never contain the words branch, commit, merge
+        request, MR, conflict, or main", which was unworkable once the
+        reviewer surface needed a name for the action that publishes a
+        document. The ban was not weakened — it was aimed.
+    - >-
+        AUTHOR-FACING surfaces: the ban stands, in full. The words branch,
+        commit, merge request, MR, conflict, and main must never appear.
+        This covers creating a document, submitting it, sending updates,
+        every display of a document's own state, every failure message on
+        those paths, and the settings tab — which every author uses. Write
+        these in author vocabulary instead: Submit for review, Send
+        updates, Waiting for review, Changes requested, Published, Not
+        accepted. This is the product thesis in enforceable form: authors
+        never learn git, and a design that leaks git mechanics into their
+        experience has failed even if it works.
+    - >-
+        REVIEWER-FACING surfaces: git vocabulary is permitted. This covers
+        the review queue and the actions taken on it, including the action
+        that publishes a document, which may be called Merge. Reviewers
+        hold Maintainer access or above and already work in GitLab
+        directly — the config's own reasoning for handing them an "Open in
+        GitLab" escape hatch, that "reviewers are more technical than
+        authors by definition", applies here for the same reason.
+    - >-
+        Where one string is seen by BOTH audiences, the author-facing rule
+        wins. Ambiguity resolves toward the ban, never away from it.
+        Internal identifiers, code, and API documentation remain exempt
+        regardless of audience.
+    - >-
+        Role names from GitLab (Guest, Planner, Reporter, Developer,
+        Maintainer, Owner) are NOT git vocabulary for this rule's purposes
+        and are shown literally on every surface, author-facing included —
+        see docs/gitlab-roles.md §7 for why translating them was rejected.
+        Copy beside a role must say what to DO, since the role name alone
+        will not tell an author what it means.
     - >-
         Every failure mode a scenario introduces must specify the exact
         message the author sees, in that same vocabulary. Shows an error is
