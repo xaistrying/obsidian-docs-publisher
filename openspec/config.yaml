@@ -33,7 +33,7 @@ context: |
     what each can do for this plugin's operations on the target CE 19.3.0
     instance, and the three independent permission gates (project role,
     credential permissions, protected-branch merge rights). Required
-    reading for anything that shapes UI by role, and for milestone 7's
+    reading for anything that shapes UI by role, and for milestone 8's
     gating. Records the load-bearing distinction that a role is an
     optimistic predictor, never proof a call will succeed.
   When a decision in this file turns on a fact recorded in `docs/`, cite
@@ -71,14 +71,28 @@ context: |
      set it up again", not as a generic failure, and must point at the
      settings tab.
   3. Create a new SOP — "New SOP" creates a note from template with the
-     front matter contract pre-filled (`doc_id` generated, required
-     fields present but empty) and opens it. No GitLab call yet.
-     Milestones 2 and 3 don't depend on each other — either can go first.
+     front matter contract pre-filled (`doc_id` generated, `owner`
+     autofilled from the authenticated identity, other required fields
+     present but empty) and opens it. UNBLOCKED (2026-08-26) by the
+     `owner` decision below.
+     DEPENDS ON MILESTONE 2, as of that decision. This corrects an
+     earlier note here that said milestones 2 and 3 did not depend on
+     each other and either could go first — that was true only while
+     `owner` might have been dropped. Autofilling it requires the
+     authenticated identity, which only the connection provides, so
+     milestone 2 must land first. It already has.
+     Makes no GitLab call of its own: the identity comes from the
+     connection state milestone 2 already retains, not from a fresh
+     request at creation time. A note cannot be created before a
+     successful connection check in that session, and that requirement
+     is this milestone's to specify.
   4. Submit for review — the first end-to-end slice: click Submit, the
      plugin creates the branch, commits, and opens the merge request; the
-     note shows "Waiting for review". Blocked on deciding the `owner`
-     field question, since that decision shapes the front matter contract
-     this milestone ships against.
+     note shows "Waiting for review". UNBLOCKED (2026-08-26): the `owner`
+     question that shaped the front matter contract is decided below, and
+     the contract is settled. Note the field is written at creation by
+     milestone 3, not here — this milestone only submits what is already
+     in the note.
   5. See your status — sidebar lists the author's own docs with their
      current state, resolved via reconciliation. Read-only from the
      author's point of view, but this is where the READ path is built:
@@ -93,6 +107,53 @@ context: |
      Resubmitting after a document was NOT accepted is a different path —
      closed merge request, stale branch — and belongs to whichever
      milestone takes the branch-recreation design question, not here.
+     Revising an already-PUBLISHED document is a third path again — merged
+     merge request, branch already deleted — and belongs to milestone 7,
+     not here. It reuses the `last_commit_id` handling this milestone
+     builds.
+  7. Revise a published document — ADDED 2026-08-26, closing an oversight
+     rather than adding scope. A published document had no way back into
+     review: milestone 6 scopes itself to an open merge request with a
+     live branch, the unnumbered placeholder takes a closed merge request
+     with a stale branch, and nobody claimed the third state — merged
+     merge request, branch already auto-deleted. It was not in the
+     out-of-scope list either, so by this file's own rule it was an
+     oversight, not a decision.
+     State it starts from: the document shows "Published". The merge
+     request merged and the branch is gone.
+     Action: the author edits the note and submits, which starts a NEW
+     cycle. The plugin cuts a fresh branch from the current remote
+     `main` — explicitly not from a local cache, nor from anything left
+     over from the previous cycle — recreates `doc/<doc_id>` under the
+     same immutable `doc_id`, and opens a new merge request. The author
+     sees "Waiting for review" again, exactly as at first submission.
+     UNBLOCKED, and note what it does NOT depend on: it does not inherit
+     the branch-recreation design question's open forks. That question has
+     two cases, and only case 1 (rejected, stale branch alive, merge
+     request closed) has unresolved forks. Case 2 — this milestone — was
+     already answered in that same decision: cut from current `main`.
+     Nothing is in the way on the remote, so there is nothing to fork on.
+     It also does not depend on milestone 8: a document reaches
+     "Published" whenever someone merges it, and on this instance that can
+     happen in GitLab's own interface. The plugin does not have to be the
+     merger for this milestone to have work to do.
+     Real dependencies: milestone 4 for the write path, and milestone 5 to
+     read the published state.
+     WHY IT SITS AT 7 rather than straight after 5, which its dependencies
+     would allow. Two reasons, both about milestone 6:
+       - `last_commit_id`. This milestone updates a file that already
+         exists in `main`, so it needs that handling — and milestone 6
+         builds it, claiming to be "the first update to an existing file".
+         Landing this one first would silently make that claim false.
+       - Priority. Milestone 6 unblocks an author stuck at "Changes
+         requested", which every first review cycle can hit. This
+         milestone matters only once a document has completed a cycle. By
+         this list's own reasoning — a stuck author is worse than a
+         reviewer without a Merge button — the common path goes first.
+     It is otherwise a sibling of milestone 6, not a successor: neither
+     needs the other's author-facing behaviour, only the shared plumbing.
+     If milestone 6 slips, this can go first, provided whoever takes it
+     also builds `last_commit_id` and corrects milestone 6's note.
   —. Resubmit after "Not accepted" — UNNUMBERED PLACEHOLDER, blocked on
      the branch-recreation design question. Deferred, not dropped: a
      rejected author currently has no way back in, so this must ship
@@ -107,7 +168,7 @@ context: |
      design question is answered — it likely lands before review-and-
      merge, since a stuck author is a worse problem than a reviewer
      without a Merge button.
-  7. Review and merge — reviewer-facing pending list and a Merge action,
+  8. Review and merge — reviewer-facing pending list and a Merge action,
      gated by the real protected-branch permission check, never a role
      label. UNBLOCKED on the tier question: confirmed GitLab CE, so
      required approvals can never gate the merge here — the protected
@@ -171,15 +232,24 @@ context: |
          discussion, but drags it along, and only works while the branch
          survives — or treat closed as terminal and start fresh, which
          gives cleaner history but leaves a stale branch to clean up.
-      2. Published, new cycle. The merge request merged, the branch was
+      2. Published, new cycle. RESOLVED, and owned by milestone 7 as of
+         2026-08-26 — this case is no longer part of the open question.
+         The merge request merged, the branch was
          auto-deleted, and months later the author revises the document
          and submits again. Nothing is in the way on the remote, but the
          name `doc/<doc_id>` now collides with the history of one or more
          already-merged merge requests. The new branch must be cut from
          current `main`, not from anything cached locally.
-    Whichever forks are chosen, the design must state who deletes an
+         It was recorded here alongside case 1 because the two share a
+         trigger and a reconciliation query, and that grouping is still
+         why they must stay consistent — but it has no unresolved forks
+         of its own. Keeping it filed under an OPEN question made it look
+         blocked when it never was, which is how it went unmilestoned.
+    Case 1 is what remains open. Whichever fork is chosen for it, the
+    design must state who deletes an
     abandoned branch, and must not assume `doc_id` maps to a single merge
-    request over the document's lifetime.
+    request over the document's lifetime — the latter holds for case 2
+    too, and milestone 7 is the first milestone to actually exercise it.
   - Pre-submit drafts have no versioning of their own beyond Obsidian's
     built-in File Recovery core plugin — do not build custom local
     versioning. Real version history starts at the first "submit."
@@ -280,7 +350,7 @@ context: |
     changes what the plugin's UI gating is for. CE has no approval rules
     at all, so nothing stops whoever holds merge rights from merging
     their own document — and here the L2 both authors and reviews.
-    OPEN GOVERNANCE QUESTION, needed by milestone 7: either authors keep
+    OPEN GOVERNANCE QUESTION, needed by milestone 8: either authors keep
     merge rights and self-merge is accepted as a social norm, or the
     Leader is the sole merger and the team accepts a bottleneck whenever
     they are away. Neither is wrong; the design must pick one rather than
@@ -345,7 +415,7 @@ context: |
     the org migrated to EE. Consequence: required approvals can never
     gate the merge on this instance; the protected `main` branch's
     "Allowed to merge" permission is the sole enforcement boundary for
-    milestone 7, not one of two checks to reconcile.
+    milestone 8, not one of two checks to reconcile.
     Still to verify:
       - Token expiry length and the rotation runbook, both implementation
         details for platform-config rather than open architecture.
@@ -498,14 +568,14 @@ context: |
     access." This keeps the capability boundary intact (git-publishing
     still owns 100% of HTTP calls; platform-config's button just calls
     into it) and the `access_level` lookup is not a throwaway extra —
-    it's half of what milestone 7's protected-branch/"Allowed to merge"
+    it's half of what milestone 8's protected-branch/"Allowed to merge"
     gating needs (the user's own access_level), so this is where that
     half is first exercised, not invented fresh later. The other half —
     which access levels the protected `main` branch actually allows to
     merge — is a separate call (`GET /projects/:id/protected_branches/
-    main`) that milestone 7 still has to add; "Test connection" does not
+    main`) that milestone 8 still has to add; "Test connection" does not
     fetch it, so don't treat this lookup as already answering milestone
-    7's gating question on its own.
+    8's gating question on its own.
     CAVEAT: this surfaces the author's project ROLE, not their token's
     exact fine-grained permission grants — GitLab has no API to
     introspect which permission checkboxes a token was created with, so
@@ -522,24 +592,86 @@ context: |
     points, both calling the same activation path: a ribbon icon and a
     command palette command.
   - Front matter contract for authored notes: `doc_id`, `title`,
-    `category`, `lifecycle`, `created`, `last_reviewed`, and possibly
-    `owner` (see below). Required fields must be present and non-empty
+    `category`, `lifecycle`, `created`, `last_reviewed`, and `owner` —
+    all seven confirmed, none conditional. Required fields must be
+    present and non-empty
     before a note can be submitted; validation happens in the plugin with
     an inline prompt, not as a CI failure after the fact. `doc_id` is
     plugin-generated and immutable — the author never edits it.
-  - `owner` is an OPEN QUESTION scoped to doc-authoring, not blocking.
-    Under personal access tokens GitLab already records who authored every
-    commit and every merge request, server-side and unspoofable, so a
-    hand-typed `owner` is a second and weaker copy of that record — and it
-    can disagree with the real one. The question doc-authoring must answer
-    is whether the field earns its place at all, rather than reading
-    authorship from GitLab. The strongest case for keeping it is a
-    reading-side one: someone browsing a published document should not
-    have to open GitLab to see who owns it. That case should be made
-    explicitly if the field survives; it should not be inherited by
-    default from the era when it was the only attribution available. If
-    kept, it must be autofilled from the authenticated identity at
-    creation — a hand-typed version is the only variant that can lie.
+  - `owner` is KEPT. DECIDED 2026-08-26, resolving what was an open
+    question scoped to doc-authoring. It is autofilled from the
+    authenticated identity when the note is created, and the plugin never
+    writes it again.
+    The case that carried it is the reading-side one, made explicitly
+    rather than inherited: someone browsing a published document should
+    see who owns it without opening GitLab. This is reader experience
+    chosen over data purity, knowingly. The counter-argument stands and
+    was not refuted — GitLab already records who authored every commit
+    and every merge request, server-side and unspoofable, so `owner` is a
+    second and weaker copy of a record that already exists.
+    ACCEPTED RISK: drift. The field is plain text in a file the author can
+    edit, so it can be made to contradict the real GitLab history, and
+    nothing in the plugin prevents that. Accepted deliberately. Do not
+    "fix" this later by having the plugin overwrite the field on every
+    submit — see the open question below for why that would destroy a
+    legitimate use before it destroyed a wrong value.
+    Autofill is why milestone 3 now depends on milestone 2: the
+    authenticated identity comes from the retained connection state, so a
+    note cannot be created before a successful connection check in that
+    session.
+  - `owner` MEANS "WHO IS RESPONSIBLE FOR IT", not "who created it".
+    DECIDED 2026-08-26, closing what was recorded as an open question the
+    day it was raised.
+    This is the reading under which the field carries information GitLab
+    does NOT have, which is the strongest form of the reading-side case
+    that justified keeping it at all. Under the rejected reading — a
+    snapshot of authorship — the field would duplicate a record GitLab
+    already holds unspoofably, and the justification for keeping it would
+    have been correspondingly weaker.
+    Consequence, and this is the load-bearing part: ownership can
+    LEGITIMATELY TRANSFER. A hand-edit of `owner` is therefore a FEATURE
+    of this design, not an instance of the drift accepted above. The two
+    look identical in a diff and are opposite in intent, which is exactly
+    why this had to be written down.
+    THE PLUGIN MUST NEVER RE-ASSERT `owner` ON SUBMIT. It is autofilled
+    once, at creation, and never written again. Overwriting it on submit
+    is the obvious-looking cure for drift and would silently revert
+    deliberate transfers — destroying a supported use to prevent an
+    accepted risk. Do not add this later as a data-integrity improvement.
+    A reviser who is not the owner is expected to leave the field alone.
+    Revising someone else's document does not transfer it; only an
+    explicit handover does.
+  - Handover and revision policy. DECIDED 2026-08-26, following from the
+    `owner` semantics above. Four rules, and note that the size of a
+    change decides nothing in any of them:
+      - OWNERSHIP TRANSFER is an in-place revision. The incoming owner
+        edits the `owner` field and submits through milestone 7 like any
+        other revision. No new document, no new `doc_id`.
+      - `doc_id` IS IMMUTABLE, permanently. Neither a rewrite, however
+        extensive, nor a change of owner mints a new one. `doc_id` answers
+        "which document is this", and neither the volume of edits nor the
+        identity of the responsible person changes that answer.
+      - SUPERSEDING is reserved strictly for a document conceptually
+        replaced by a DIFFERENT document — "VPN Setup" giving way to
+        "Zero Trust Access". Old document goes to
+        `lifecycle: superseded`, new document gets a new `doc_id`. It is
+        NOT for large diffs and NOT for handovers.
+      - CHANGELOGS IN THE DOCUMENT ARE EXPRESSLY OMITTED. History is
+        delegated to git, which records what changed and who changed it
+        unspoofably — including edits to `owner`, so ownership history
+        comes free. Freshness is delegated to `last_reviewed`. A
+        hand-maintained changelog would be the same trade already
+        accepted for `owner`, but a worse one: it needs updating on every
+        change rather than only at handover, so it drifts faster, and it
+        duplicates something git answers precisely.
+    Rejected: keying any of this on the magnitude of a change — archiving
+    the old document and having the incoming owner write a fresh version
+    when the changes are "significant". "Significant" cannot be defined,
+    so two people apply it differently and the rule decays into author
+    preference. It also conflates two independent axes — who is
+    responsible, and which document this is. Readers want one stable place
+    to find the current procedure, not a chain of superseded documents to
+    walk backwards through.
   - `lifecycle` is EDITORIAL, not workflow: `active`, `deprecated`,
     `superseded`. It describes the standing of a published document and a
     published document keeps moving through it long after any merge
