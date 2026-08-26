@@ -2,11 +2,12 @@
   "compilerOptions": {
     "inlineSourceMap": true,
     "inlineSources": true,
-    "module": "commonjs",
+    "module": "esnext",
     "target": "ES6",
     "allowJs": true,
     "noImplicitAny": true,
     "moduleResolution": "bundler",
+    "skipLibCheck": true,
     "importHelpers": true,
     "isolatedModules": true,
     "lib": [
