@@ -2,10 +2,12 @@ import { App, ButtonComponent, Plugin, PluginSettingTab, Setting } from 'obsidia
 import type { ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
 import { getCurrentUser, getProjectAccess } from '../git-publishing/gitlab-client';
 import { hasConnectionDetails } from './connection';
+import type { ConnectionState, ConnectionStateHolder } from './connection-state';
 
-/** All the settings tab needs from the plugin: somewhere to keep the details. */
+/** All the settings tab needs from the plugin: the details, and the outcome. */
 export interface ConnectionHolder {
 	readonly connection: ConnectionDetails;
+	readonly connectionState: ConnectionStateHolder;
 }
 
 const CHECKING_MESSAGE = 'Checking…';
@@ -24,7 +26,7 @@ class ConnectionSettingTab extends PluginSettingTab {
 	private readonly holder: ConnectionHolder;
 	private statusEl: HTMLElement | null = null;
 	private testButton: ButtonComponent | null = null;
-	private checking = false;
+	private unsubscribe: (() => void) | null = null;
 
 	constructor(app: App, plugin: Plugin & ConnectionHolder) {
 		super(app, plugin);
@@ -54,6 +56,7 @@ class ConnectionSettingTab extends PluginSettingTab {
 					.setValue(this.holder.connection.host)
 					.onChange((value) => {
 						this.holder.connection.host = value;
+						this.discardResult();
 					})
 			);
 
@@ -69,6 +72,7 @@ class ConnectionSettingTab extends PluginSettingTab {
 					.setValue(this.holder.connection.projectId)
 					.onChange((value) => {
 						this.holder.connection.projectId = value;
+						this.discardResult();
 					})
 			);
 
@@ -85,6 +89,7 @@ class ConnectionSettingTab extends PluginSettingTab {
 					.setValue(this.holder.connection.token)
 					.onChange((value) => {
 						this.holder.connection.token = value;
+						this.discardResult();
 					});
 			});
 
@@ -100,11 +105,19 @@ class ConnectionSettingTab extends PluginSettingTab {
 
 		this.statusEl = containerEl.createDiv({ cls: 'setting-item-description' });
 
-		// The tab can be reopened while a check is still running: rebuild its
-		// busy state so the fresh button and status line match reality.
-		if (this.checking) {
-			this.setBusy(true);
-			this.setStatus(CHECKING_MESSAGE);
+		// The tab renders the retained result rather than one it keeps privately,
+		// so reopening it mid-check needs no reconstruction: the shared state
+		// already says the check is running.
+		this.render(this.holder.connectionState.current);
+		this.unsubscribe = this.holder.connectionState.onChange((state) => {
+			this.render(state);
+		});
+	}
+
+	hide(): void {
+		if (this.unsubscribe !== null) {
+			this.unsubscribe();
+			this.unsubscribe = null;
 		}
 	}
 
@@ -113,9 +126,13 @@ class ConnectionSettingTab extends PluginSettingTab {
 	 * sequential so each failure is attributed to the right thing: a rejected
 	 * token surfaces from the identity read, an unreachable project from the
 	 * project read.
+	 *
+	 * Publishes each step into the shared state rather than rendering it here,
+	 * so every surface showing the connection follows along.
 	 */
 	private async testConnection(): Promise<void> {
-		if (this.checking) {
+		const state = this.holder.connectionState;
+		if (state.current.kind === 'checking') {
 			return;
 		}
 
@@ -125,33 +142,52 @@ class ConnectionSettingTab extends PluginSettingTab {
 			return;
 		}
 
-		this.setBusy(true);
-		this.setStatus(CHECKING_MESSAGE);
+		state.set({ kind: 'checking' });
 		try {
 			const identity = await getCurrentUser(details);
 			if (!identity.ok) {
-				this.setStatus(FAILURE_MESSAGES[identity.failure]);
+				state.set({ kind: 'failed', failure: identity.failure, identity: null });
 				return;
 			}
 
 			const access = await getProjectAccess(details);
 			if (!access.ok) {
-				this.setStatus(FAILURE_MESSAGES[access.failure]);
+				state.set({ kind: 'failed', failure: access.failure, identity: identity.value });
 				return;
 			}
 
-			this.setStatus(`Connected as ${identity.value.name} — ${access.value.accessLabel} access`);
+			state.set({ kind: 'verified', identity: identity.value, access: access.value });
 		} catch {
-			this.setStatus(FAILURE_MESSAGES['unexpected']);
-		} finally {
-			this.setBusy(false);
+			state.set({ kind: 'failed', failure: 'unexpected', identity: null });
 		}
 	}
 
-	private setBusy(busy: boolean): void {
-		this.checking = busy;
+	/**
+	 * Editing any of the three values discards the retained result, so a
+	 * verified person is never reported alongside details they were not
+	 * verified against. Deliberately does not start a new check.
+	 */
+	private discardResult(): void {
+		this.holder.connectionState.set({ kind: 'unverified' });
+	}
+
+	private render(state: ConnectionState): void {
 		if (this.testButton !== null) {
-			this.testButton.setDisabled(busy);
+			this.testButton.setDisabled(state.kind === 'checking');
+		}
+		this.setStatus(this.statusText(state));
+	}
+
+	private statusText(state: ConnectionState): string {
+		switch (state.kind) {
+			case 'unverified':
+				return '';
+			case 'checking':
+				return CHECKING_MESSAGE;
+			case 'verified':
+				return `Connected as ${state.identity.name} — ${state.access.accessLabel} access`;
+			case 'failed':
+				return FAILURE_MESSAGES[state.failure];
 		}
 	}
 
