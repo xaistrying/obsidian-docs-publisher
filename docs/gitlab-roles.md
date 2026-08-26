@@ -128,7 +128,7 @@ The plugin therefore **must never infer publish rights from the access
 level**. It reads `GET /projects/:id/protected_branches/main` and checks
 the author's own level against the returned `merge_access_levels`. This is
 recorded as an architecture decision in `openspec/config.yaml` and is
-scheduled for milestone 7; `Test connection` deliberately does not make
+scheduled for milestone 8; `Test connection` deliberately does not make
 this call today.
 
 **Self-merge is a separate concern and CE cannot enforce it.** Approval
