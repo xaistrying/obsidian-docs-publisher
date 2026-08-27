@@ -1,14 +1,17 @@
 import { Plugin, ButtonComponent, ItemView, WorkspaceLeaf } from 'obsidian';
 import type { ConnectionDetails, FailureKind } from './git-publishing/gitlab-client';
 import { createEmptyConnectionDetails } from './platform-config/connection';
+import { createDocument } from './doc-authoring/create-document';
+import { NO_DOCUMENT_ACCESS_MESSAGE, readOnlyMessage } from './platform-config/access-messages';
 import type { ConnectionState } from './platform-config/connection-state';
-import { ConnectionStateHolder, grantsDocumentAccess } from './platform-config/connection-state';
+import { ConnectionStateHolder, grantsAuthoring, grantsReadOnly } from './platform-config/connection-state';
 import { openSettingsTab } from './platform-config/open-settings';
 import { ConnectionSettingTab } from './platform-config/settings-tab';
 
 const VIEW_TYPE = 'docs-publisher-view';
 
 const OPEN_SETTINGS_LABEL = 'Open settings';
+const NEW_DOCUMENT_LABEL = 'New Document';
 
 /**
  * The panel's own copy for each failure. Deliberately not shared with the
@@ -27,11 +30,20 @@ const PANEL_FAILURE_MESSAGES: Record<FailureKind, string> = {
 class DocsPublisherView extends ItemView {
 	private readonly state: ConnectionStateHolder;
 	private readonly pluginId: string;
+	private readonly newDocument: () => void;
 
-	constructor(leaf: WorkspaceLeaf, state: ConnectionStateHolder, pluginId: string) {
+	constructor(
+		leaf: WorkspaceLeaf,
+		state: ConnectionStateHolder,
+		pluginId: string,
+		newDocument: () => void
+	) {
 		super(leaf);
 		this.state = state;
 		this.pluginId = pluginId;
+		// Handed in rather than built here, so the control and the command
+		// palette entry are literally the same path and cannot drift apart.
+		this.newDocument = newDocument;
 	}
 
 	getViewType(): string {
@@ -112,9 +124,22 @@ class DocsPublisherView extends ItemView {
 			return;
 		}
 
-		if (grantsDocumentAccess(state)) {
-			container.createEl('p', { text: 'Ready to publish your documentation.' });
-			return;
+		// The three connected states, in descending capability. "Ready to
+		// publish" belongs to this first one alone: below Developer the author
+		// can publish nothing, so telling them they are ready would contradict
+		// the panel's own refusal. See docs/gitlab-roles.md §3.
+		if (state.kind === 'verified') {
+			if (grantsAuthoring(state)) {
+				container.createEl('p', { text: 'Ready to publish your documentation.' });
+				this.addNewDocumentButton(container);
+				return;
+			}
+
+			if (grantsReadOnly(state)) {
+				container.createEl('p', { text: readOnlyMessage(state.access.accessLabel) });
+				this.addSettingsButton(container);
+				return;
+			}
 		}
 
 		// Everything else is blocked: the same layout either way, differing only
@@ -128,10 +153,18 @@ class DocsPublisherView extends ItemView {
 			return PANEL_FAILURE_MESSAGES[state.failure];
 		}
 
-		return (
-			"Your GitLab account does not have access to this project's documents. " +
-			'Ask your admin for access.'
-		);
+		return NO_DOCUMENT_ACCESS_MESSAGE;
+	}
+
+	/**
+	 * Rendered only in the state where creating would succeed, never disabled
+	 * or greyed elsewhere: a visible button that refuses when pressed is worse
+	 * than no button, and the panel already re-renders when the state changes.
+	 */
+	private addNewDocumentButton(container: HTMLElement): void {
+		new ButtonComponent(container).setButtonText(NEW_DOCUMENT_LABEL).onClick(() => {
+			this.newDocument();
+		});
 	}
 
 	private addSettingsButton(container: HTMLElement): void {
@@ -159,7 +192,10 @@ class DocsPublisherPlugin extends Plugin {
 		// Register the custom view
 		this.registerView(
 			VIEW_TYPE,
-			(leaf: WorkspaceLeaf) => new DocsPublisherView(leaf, this.connectionState, this.manifest.id)
+			(leaf: WorkspaceLeaf) =>
+				new DocsPublisherView(leaf, this.connectionState, this.manifest.id, () => {
+					this.newDocument();
+				})
 		);
 
 		// Add the settings tab for the GitLab connection details
@@ -178,12 +214,34 @@ class DocsPublisherPlugin extends Plugin {
 				this.activateView();
 			}
 		});
+
+		// A plain `callback`, not `checkCallback`. `checkCallback` would drop the
+		// entry from the palette when the author cannot use it, and would also
+		// make a bound hotkey do nothing at all, silently — the failure mode
+		// `openSettingsTab` already goes out of its way to avoid. The gate lives
+		// inside the path instead and says what to do next.
+		this.addCommand({
+			id: 'new-document',
+			name: 'New Document',
+			callback: () => {
+				this.newDocument();
+			}
+		});
 	}
 
 	onunload(): void {
 		console.log('Unloading Docs Publisher plugin');
 		// Note: We deliberately do NOT call detachLeavesOfType here.
 		// Detaching would destroy the user's layout every time the plugin updates.
+	}
+
+	/**
+	 * The one path to creating a document. Both entry points call this, so the
+	 * gate is enforced wherever the action is triggered rather than by which
+	 * controls happen to be on screen.
+	 */
+	private newDocument(): void {
+		void createDocument(this.app, this.connection, this.connectionState.current);
 	}
 
 	private async activateView(): Promise<void> {

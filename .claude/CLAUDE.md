@@ -19,6 +19,14 @@ so the facts are looked up once, not re-derived or guessed per session.
   here; the three independent permission gates; why a role is an optimistic
   predictor and never proof a call will succeed. Read before anything that
   shapes UI by role or gates an action on permissions.
+- `docs/document-identity.md` — what `doc_id` is and when it is frozen, how
+  branches are named, how a note is reconnected to its merge request, and how
+  remote paths are decided. Read before naming a branch, resolving a note to a
+  merge request, or deciding where a file goes on the remote.
+- `docs/access-tokens.md` — which token type this project uses and why, what is
+  held in memory versus written to disk, the open `secretStorage` spike, and
+  what "Test connection" does and does not prove. Read before touching
+  credential handling or authentication.
 
 `openspec/config.yaml` lists these under REFERENCE DOCS and is the authority on
 project decisions; `docs/` carries the supporting detail. If a fact appears in

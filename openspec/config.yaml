@@ -36,6 +36,15 @@ context: |
     reading for anything that shapes UI by role, and for milestone 8's
     gating. Records the load-bearing distinction that a role is an
     optimistic predictor, never proof a call will succeed.
+  - `docs/document-identity.md` — how a document is identified, how its branch
+    is named, how a note is reconnected to its merge request, and where its
+    file lives on the remote. Required reading before designing anything that
+    names a branch, resolves a note to a merge request, or decides a remote
+    path.
+  - `docs/access-tokens.md` — which token type this project uses and why, what
+    is held in memory versus written to disk, the open `secretStorage` spike,
+    and what "Test connection" does and does not prove. Required reading
+    before touching credential handling or authentication.
   When a decision in this file turns on a fact recorded in `docs/`, cite
   the doc rather than restating the fact — one copy, so the two cannot
   drift apart. Add a new doc when a subject needs more than a paragraph
@@ -70,29 +79,105 @@ context: |
      plugin must surface as "Your access has expired — ask your admin to
      set it up again", not as a generic failure, and must point at the
      settings tab.
-  3. Create a new SOP — "New SOP" creates a note from template with the
-     front matter contract pre-filled (`doc_id` generated, `owner`
-     autofilled from the authenticated identity, other required fields
-     present but empty) and opens it. UNBLOCKED (2026-08-26) by the
-     `owner` decision below.
+  3. Create a new document — RENAMED 2026-08-26 from "Create a new SOP".
+     "New Document" creates a note at the author's current folder with
+     the front matter fields the plugin can know at creation, and opens
+     it. UNBLOCKED (2026-08-26) by the `owner` decision below.
      DEPENDS ON MILESTONE 2, as of that decision. This corrects an
      earlier note here that said milestones 2 and 3 did not depend on
      each other and either could go first — that was true only while
      `owner` might have been dropped. Autofilling it requires the
      authenticated identity, which only the connection provides, so
      milestone 2 must land first. It already has.
+     WHAT IT WRITES, and why the list is exactly four — AMENDED
+     2026-08-26 by the shift-right split below. The plugin fills the
+     fields it can know without asking: `owner` from the authenticated
+     identity, `created` as today, `last_reviewed` equal to `created`,
+     and `lifecycle: active`. `title`, `category` and `doc_id` are NOT
+     written here — they are the author's to decide and are collected at
+     submit by milestone 4. The author gets a file they can start typing
+     into with no modal in the way, which is the point of the split.
+     The label "New SOP" was dropped because the naming decision below
+     already rejected `sop-*` for the plugin on the grounds that the SOP
+     framing is this team's use case rather than the plugin's scope —
+     and SOP is now one of nine categories, not the whole corpus.
      Makes no GitLab call of its own: the identity comes from the
      connection state milestone 2 already retains, not from a fresh
      request at creation time. A note cannot be created before a
      successful connection check in that session, and that requirement
-     is this milestone's to specify.
+     is this milestone's to specify. Creation is additionally gated at
+     Developer (30) per the access-floor decision below.
+     REJECTED: creating a blank note with empty front matter and
+     deferring every field to submit. It looks like the tidier version
+     of shift-right and it dissolves this milestone — a blank file is
+     Obsidian's own New Note, it produces nothing a person can observe
+     that the core app does not, and it removes the `owner` autofill
+     that is the entire reason this milestone depends on milestone 2.
   4. Submit for review — the first end-to-end slice: click Submit, the
      plugin creates the branch, commits, and opens the merge request; the
      note shows "Waiting for review". UNBLOCKED (2026-08-26): the `owner`
      question that shaped the front matter contract is decided below, and
-     the contract is settled. Note the field is written at creation by
-     milestone 3, not here — this milestone only submits what is already
-     in the note.
+     the contract is settled.
+     AMENDED 2026-08-26 by the shift-right split, and note this REVERSES
+     a sentence that stood here: "this milestone only submits what is
+     already in the note." That is no longer true. Three fields are
+     completed here, not at creation:
+       - `title` — the author is prompted for it.
+       - `category` — the author picks one of the nine deliverables.
+       - `doc_id` — the plugin snapshots the note's CURRENT filename into
+         front matter, once. From that moment it is frozen, and the
+         filename may drift away from it freely.
+     Submission is blocked until `title` and `category` are present and
+     non-empty, per the front matter contract below — an inline prompt,
+     not a failure after the fact.
+     `owner`, `created`, `last_reviewed` and `lifecycle` are written at
+     creation by milestone 3 and are not touched here.
+     The pre-submit checks below (duplicate `doc_id`, then path mismatch)
+     do not bind on a FIRST submit: nothing is on the remote yet, so
+     there is no path to drift from. They bind from the second submit
+     onward, which makes them milestone 6's and milestone 7's to enforce.
+  4a. Attachment sync — ADDED 2026-08-26, closing an oversight rather
+     than adding scope. Numbered `4a` ON PURPOSE: this list's numbering
+     is dependency order, so a milestone that executes between 4 and 5
+     must read that way. Renumbering 5 through 8 was rejected — this file
+     cross-references milestones by number in a dozen places and every
+     miss becomes a silently wrong pointer.
+     The gap: milestone 4 commits one file, the note. A document that
+     embeds an image publishes with a broken embed, in GitLab and
+     anywhere downstream. The corpus does use images, so this is the
+     normal case for a Diagnostic Reference or a Known Errors document,
+     not an edge case. It appeared in neither this list nor the
+     out-of-scope list, which by this file's own rule makes it an
+     oversight, not a decision.
+     Sits AFTER milestone 4 because it rewrites that milestone's commit
+     payload from a single file action into an actions array. Building
+     the array in milestone 4 speculatively would violate the proposal
+     rule against abstractions with no user-visible surface calling them.
+     Milestones 6 and 7 then inherit it for free — they commit through
+     the same path.
+     Three things make this larger than "parse the file and base64 the
+     images", and its design must answer all three:
+       - `![[image.png]]` CONTAINS NO PATH. Obsidian resolves wikilinks
+         by shortest-path lookup through `metadataCache`. A regex over
+         the text yields a filename, not a location, and guesses wrong
+         the moment two folders hold a same-named image. Resolution goes
+         through Obsidian's own resolver. Standard `![alt](path.png)`
+         links ARE paths and behave differently; both forms exist.
+       - SHARED ATTACHMENTS. A logo embedded in twenty documents means
+         twenty branches writing one path. A `create` action fails when
+         the file already exists on `main`, so the plugin must send
+         `update` with that file's own `last_commit_id` instead — and if
+         two authors submit DIFFERENT content at one path on concurrent
+         branches, the second merge is a genuine content conflict the
+         plugin cannot resolve and whose name the author-facing
+         vocabulary rule bans.
+       - ORPHANS. Unlinking or moving an image locally strands the old
+         remote file. Consistent with the refuse-to-move contract below,
+         this milestone NEVER DELETES: orphaned attachments accumulate
+         and a Maintainer clears them in GitLab, the same escape hatch
+         reorganization already uses.
+     Attachment paths follow the same 1:1 vault mirroring as documents
+     and are pushed from their location at submit time.
   5. See your status — sidebar lists the author's own docs with their
      current state, resolved via reconciliation. Read-only from the
      author's point of view, but this is where the READ path is built:
@@ -111,6 +196,12 @@ context: |
      merge request, branch already deleted — and belongs to milestone 7,
      not here. It reuses the `last_commit_id` handling this milestone
      builds.
+     CLAIMS THE PRE-SUBMIT CHECKS, added 2026-08-26 — this is the first
+     milestone where a document is submitted a SECOND time, so it is
+     where the duplicate-`doc_id` check and then the path-mismatch check
+     first bind, in that order, per the refuse-to-move decision below.
+     It therefore also makes the reconciliation call that reads the
+     remote path, which milestone 5 built.
   7. Revise a published document — ADDED 2026-08-26, closing an oversight
      rather than adding scope. A published document had no way back into
      review: milestone 6 scopes itself to an open merge request with a
@@ -154,6 +245,11 @@ context: |
      needs the other's author-facing behaviour, only the shared plumbing.
      If milestone 6 slips, this can go first, provided whoever takes it
      also builds `last_commit_id` and corrects milestone 6's note.
+     CLAIMS THE PRE-SUBMIT CHECKS TOO, added 2026-08-26: a published
+     document being revised is a second submit, so the duplicate-`doc_id`
+     and path-mismatch checks bind here exactly as in milestone 6. If
+     this lands first, it builds them and milestone 6's note above is the
+     one to correct.
   —. Resubmit after "Not accepted" — UNNUMBERED PLACEHOLDER, blocked on
      the branch-recreation design question. Deferred, not dropped: a
      rejected author currently has no way back in, so this must ship
@@ -188,7 +284,11 @@ context: |
      "Open in GitLab" link.
   Not yet milestoned, and not accidentally: multi-platform support (out of
   scope per git-publishing's capability boundary, not merely deferred),
-  offline queueing (explicit non-goal), and anything beyond
+  offline queueing (explicit non-goal), note-in-note transclusion —
+  `![[Other Document]]` is a reference to another note rather than an
+  attachment, so milestone 4a does not carry it and a host document
+  published alone renders it broken (ADDED 2026-08-26, recorded here so
+  it reads as a decision rather than an omission) — and anything beyond
   one-note-one-branch-one-merge-request. This list is for work that is
   genuinely OUT OF SCOPE. Work that is merely blocked or deferred belongs
   in the numbered sequence above, as a placeholder if it cannot be
@@ -255,55 +355,75 @@ context: |
     versioning. Real version history starts at the first "submit."
   - Model: one note = one branch = one merge request (v1). Multi-doc MRs
     are an explicit non-goal for now.
-  - Branch naming: `doc/<doc_id>`, where `doc_id` is a short opaque
-    identifier generated once when the note is created and written to its
-    front matter. The branch name is derived from nothing that can drift.
-    The human-readable name lives in the merge request TITLE, which is
-    what reviewers read in GitLab's UI and which can be updated freely
-    when a note is retitled, without touching the branch.
-    Rejected: deriving the branch name from the note's title or path.
-    Obsidian users rename notes and move them between folders routinely,
-    and either scheme stops reproducing the moment they do. Keeping the
-    title out of ref names also sidesteps git's ref restrictions (spaces
-    and `~^:?*[\` are illegal) and the ASCII-folding that Vietnamese
-    titles with diacritics would otherwise require — do not "improve"
-    this back into readable slugs.
-  - Branch names are reused across a document's lifetime, so `doc_id` to
-    merge request is one-to-MANY, not one-to-one. `doc_id` is immutable
-    but `doc/<doc_id>` is transient: created at submit, deleted on merge,
-    then recreated with the identical name the next time that document is
-    revised. A living SOP is expected to go through repeated cycles —
-    that is what `lifecycle` exists for — so after the first revision
-    cycle a query by `source_branch` returns several merge requests: old
-    merged ones, and possibly a current open one.
-  - Reconciliation: a note whose local pointer is missing is reconnected
-    by reading `doc_id` from its front matter and querying merge requests
-    with `source_branch = doc/<doc_id>`, ALL states, newest first. Resolve
-    the result as follows:
-      - An open merge request wins if one exists. At most one can, since
-        GitLab refuses a second open merge request from the same source
-        and target branch, so this match is unambiguous.
-      - Otherwise the most recent merge request determines the state:
-        merged means published and the branch is already gone; closed
-        means not accepted and the branch may still exist.
-      - No merge requests at all means the note has never been submitted.
-    Do NOT filter the query to open merge requests only. That returns
-    nothing for a rejected document, so reconciliation would report it as
-    never submitted; the author would then submit, and the call would
-    fail because the branch from the rejected cycle is still there.
-    Because `doc_id` is committed with the note, a file pulled fresh from
-    `main` on a different machine reconciles with no local state at all.
-    This matters because plugin data is not reliably synced and does not
-    survive a plugin reinstall or a vault restored from backup. Reconcile
-    by listing merge requests once and matching every orphan against that
-    result locally — one call total, not one per note.
-  - `doc_id` in front matter is NOT a contradiction of the rule against
-    storing submission state there. That rule bans values that change
-    every review round and go stale in `main`. `doc_id` is immutable
-    identity: written once at creation, never updated, no diff noise.
-  - Duplicating a note in Obsidian copies its front matter, so two notes
-    can claim the same `doc_id`. The plugin must detect a collision and
-    refuse to submit rather than silently commit two files to one branch.
+  - Document identity, branch naming, reconciliation, and file paths now live
+    in `docs/document-identity.md` — MOVED there 2026-08-26 to keep this file
+    under OpenSpec's context limit, verbatim and unchanged. Read it BEFORE
+    designing anything that names a branch, resolves a note to a merge
+    request, or decides where a file goes on the remote.
+    What it settles: `doc_id` is the note's filename snapshotted at FIRST
+    SUBMIT and frozen permanently thereafter; the branch derives from that
+    frozen value and NEVER from the live filename; reconciliation queries all
+    merge request states, newest first; the vault mirrors the repository 1:1
+    from the root; and a document whose local path has drifted is REFUSED
+    rather than moved, with the duplicate-`doc_id` check ordered first.
+    The OPEN branch-recreation question above stays in THIS file on purpose —
+    open questions belong where they will be seen, not in reference.
+  - CREATING AND SUBMITTING REQUIRE DEVELOPER (30). DECIDED 2026-08-26.
+    `docs/gitlab-roles.md` §3 puts Submit at level 30 — it is a push to a
+    non-protected branch — so a Planner or Reporter can read the corpus
+    and the review queue and can never publish anything they write.
+    Gating CREATION and not only submission is deliberate: letting
+    someone draft a document they can never submit fails them later, and
+    worse.
+    Consequence for a surface already shipped: the panel's
+    `DOCUMENT_ACCESS_LEVEL = 15` threshold currently shows "Ready to
+    publish your documentation." to a Planner. That message is wrong
+    under this decision, and plugin-shell needs a distinct READ-ONLY
+    state — the band vocabulary is already in `docs/gitlab-roles.md` §4.
+    This gate is OPTIMISTIC, never proof, and gate 2 stands behind it: a
+    Developer holding a read-only credential passes this check and still
+    fails to submit. It removes the common case, not the case, and every
+    action must still fail gracefully.
+  - TOKEN PERMISSIONS CANNOT BE PRE-FLIGHTED. DECIDED 2026-08-26,
+    recorded because "block the action when the token lacks the
+    permission" is the obvious-sounding design and is impossible.
+    `docs/gitlab-roles.md` §1: no endpoint lists which permission
+    checkboxes a fine-grained credential was created with. The plugin
+    therefore ATTEMPTS the operation, catches the failure and translates
+    it — the spike found GitLab names the missing permission in an
+    `insufficient_granular_scope` error rather than returning a bare 403,
+    which is unusually good material for a clear message. Do not later
+    "improve" this into a pre-flight check; there is nothing to check
+    against.
+  - NO CI PIPELINE. DECIDED 2026-08-26, after a proposal to have GitLab
+    CI update `last_reviewed` on merge and, in one version, flip
+    `lifecycle` from draft to active. Rejected on two independent
+    grounds, recorded because the idea is appealing and will recur.
+    MECHANICAL: nothing pulls remote content back into the vault. A CI
+    commit to `main` makes every local copy differ from the remote after
+    every merge, and the next revision submits the whole local file — the
+    commit API sends content, not a diff — silently reverting CI's write
+    and showing a spurious regression in the diff every cycle. The
+    obvious guard, a pull that refuses when local differs from remote,
+    DEADLOCKS: CI's own change is the difference, so the pull is refused
+    forever and the update never arrives.
+    SEMANTIC: `last_reviewed` under CI means "last merged", which is
+    exactly what git already records — the duplication this file rejected
+    changelogs for. Human-maintained it means "someone re-read this and
+    confirmed it is still true", which git does not know, especially when
+    the review changed nothing and produced no commit.
+    `last_reviewed` is therefore human-maintained, edited by the author
+    on the revision that reviews the document. It is autofilled once, at
+    creation, equal to `created`.
+    Consequence worth keeping: with no CI the plugin is the sole writer
+    to `main`, so local and remote diverge only through the "Open in
+    GitLab" escape hatch — a risk this file already accepts. A pull
+    mechanism therefore drops from mandatory to optional. If one is ever
+    built, its baseline for "has unsubmitted changes" must be the last
+    content submitted FROM THIS VAULT, never the live remote file, and it
+    must also refuse while a document is awaiting review.
+    Struck along with the pipeline: "CI deletes the source branch" was
+    redundant — GitLab auto-deletes on merge already.
   - Revisions reuse the same branch and the same merge request. A review
     round never creates a second merge request.
   - One writer per branch. Reviewers comment; the author edits. Reviewers
@@ -372,217 +492,18 @@ context: |
     rather than swallow the error, and retries must be idempotent (check
     whether the branch/MR already exists before redoing a partially
     completed submit).
-  - Credentials: DECIDED — personal access tokens, one per author, short
-    expiry, documented rotation. The plugin authenticates as the person
-    using it, never as a shared identity. Token TYPE: fine-grained, not
-    legacy `api` scope — RESOLVED (2026-08-24, provisionally); see the
-    Credentials section below for the spike that settled it and the one
-    deferred, non-blocking item still hanging off that resolution.
-    Rejected: (b) a single project access token, and (c) a project access
-    token with `author_name`/`author_email` set per commit. Both act as a
-    bot user (`project_{id}_bot`), and both fail for the same reason: the
-    merge request's author field is tied to the authenticating identity
-    and cannot be set, so every submission would be authored by the bot
-    regardless of who wrote it. Commit signing is irrelevant to this —
-    signing only constrains option (c)'s commit-author spoofing, and says
-    nothing about who owns the merge request. So the decision does not
-    depend on the signing check.
-    Two independent reasons, whichever applies to the target tier:
-      - Premium/Ultimate: the "prevent approval by author" setting keys on
-        the merge request author. With the bot as author for everyone, the
-        rule never fires for anyone who both authors and holds approval
-        rights — they could approve their own document and GitLab would
-        not object. Under personal tokens it fires automatically, for
-        whoever that turns out to be.
-      - Free: that setting does not exist (approval rules are Premium+;
-        on Free any Developer may approve and approvals never block a
-        merge), so the hole is not bot-specific. Personal tokens still win
-        on audit trail and revocation granularity — a shared token makes it
-        impossible to attribute a submission to a person, and offboarding
-        one author would force a rotation for everyone. CONFIRMED as the
-        applicable branch — see below.
-    Confirmed: the target instance is GitLab Community Edition (CE)
-    v19.3.0, not Enterprise Edition — checked via the instance's
-    Help/version page. The version matters because several decisions in
-    this file turn on version-specific behaviour (`detailed_merge_status`
-    from 15.6, fine-grained token enforcement from 18.11 and generally
-    available on Self-Managed at 19.2) — 19.3.0 post-dates all of them,
-    which is exactly why the instance already defaults to the
-    fine-grained token flow rather than it being merely implied. CE ships
-    without Premium/Ultimate
-    features regardless of license, so this is a structural fact of the
-    edition rather than a subscription toggle — it would only change if
-    the org migrated to EE. Consequence: required approvals can never
-    gate the merge on this instance; the protected `main` branch's
-    "Allowed to merge" permission is the sole enforcement boundary for
-    milestone 8, not one of two checks to reconcile.
-    Still to verify:
-      - Token expiry length and the rotation runbook, both implementation
-        details for platform-config rather than open architecture.
-    Token type (legacy `api` scope vs. fine-grained) — RESOLVED
-    (2026-08-24), provisionally: fine-grained. Context for why this took
-    a spike rather than a guess: fine-grained sidesteps the deprecation
-    risk below entirely if it can do the job, and this instance runs
-    19.3.0, well past general availability, so early-beta partial
-    coverage was not a safe assumption to carry forward untested.
-    A manual spike confirmed it: all six required operations (create a
-    branch, commit a file, create a merge request, list merge requests,
-    add a note, merge) succeeded against a scoped fine-grained token on
-    gitlab.com (`GET /user`, branch+commit via `start_branch`, create
-    merge request, list by `source_branch`, add a note, merge with the
-    `sha` param) — once the token was generated with a "Merge Request:
-    Merge" permission checked. The first attempt omitted it and failed
-    with a named `insufficient_granular_scope` error naming exactly that
-    permission, not a generic 403 — informative in itself: the gap was a
-    missed checkbox on token creation, not a missing capability.
-    Two things remain, neither blocking platform-config:
-      (a) DEFERRED, not blocking. This ran against gitlab.com (SaaS/EE,
-          continuous deployment), not the self-managed CE 19.3.0 target
-          instance, which is the one that actually matters — SaaS's
-          fine-grained rollout is not guaranteed identical to
-          Self-Managed 19.3.0. Rerun against the real instance when
-          convenient; not required before platform-config ships.
-      (b) OWNED OPERATIONALLY, not a plugin design concern. Exact
-          per-token permission selection (which checkboxes, per
-          member/role) is handled during author onboarding by whoever
-          administers the project, not prescribed by settings-tab copy.
-          The settings tab therefore points authors at the fine-grained
-          flow generically, without enumerating exact permission names.
-    Consequence: milestone 2's settings-tab guidance flips from the
-    legacy flow to the fine-grained flow — see milestone 2 above, updated
-    accordingly.
-  - KNOWN DEPRECATION RISK on the credentials decision, and the failure
-    mode is specifically rotation. Fine-grained tokens exist to replace
-    the broad legacy scopes — `api` among them — with granular
-    permissions scoped to particular groups and projects. Enforcement was
-    introduced in 18.11 behind feature flags and became generally
-    available on Self-Managed in 19.2. THIS INSTANCE IS 19.3.0, so it is
-    past both: enforcement is not approaching, it is available to any
-    administrator today and waits only on a date being set. Do not read
-    this as a future concern.
-    On Self-Managed the switch is instance-wide: once an administrator
-    sets an enforcement date, users can no longer CREATE OR ROTATE legacy
-    personal access tokens, while existing legacy tokens keep working
-    until they expire.
-    Consequence for this project: the break is not "everything stops one
-    morning". Authors' tokens keep working, then expire, and cannot be
-    renewed — and short expiry with routine rotation is the whole
-    credentials model, so the operation that breaks is the one this
-    design leans on hardest. Someone must own watching for that
-    enforcement date, and the fine-grained coverage question above should
-    be settled before it arrives rather than after. Note the risk is
-    asymmetric: adopting fine-grained tokens early costs a one-off
-    migration, whereas being caught by enforcement costs every author
-    their access with no rotation path back.
-    Note also that commit authors are matched to GitLab accounts by email
-    only — the Commits API returns author name and email but no user id —
-    so a wrong email silently renders as an unlinked plain-text name.
-    UPDATE (2026-08-24): moot as of the decision above — the project is
-    proceeding on fine-grained tokens from milestone 2 onward, so there
-    is no legacy-token era to migrate off of later, and no enforcement
-    date to watch for. Provisional on the deferred self-managed rerun
-    ((a) in the Credentials section above): if that rerun ever turns up a
-    real gap on the target instance, this risk comes back into play and
-    the fallback is the legacy flow already documented in milestone 2.
-  - Plugin data shape / credential persistence: DECIDED (2026-08-24).
-    Credentials are session-scoped, in-memory only — NEVER written via
-    `saveData()`/`data.json`. Three separate fields, pasted into the
-    settings tab once per Obsidian launch:
-      - `GL_HOST` — the GitLab instance base URL
-      - `GL_PROJECT` — the project namespace path (e.g.
-        `team/sop-knowledge-base`), DECIDED over a numeric ID for
-        readability — GitLab's REST API accepts a URL-encoded path
-        directly as the `:id` param, so no "resolve to numeric ID"
-        round-trip is needed.
-      - `GL_TOKEN` — the personal/fine-grained access token
-    Held in a plugin-instance field populated by the settings tab's form,
-    not re-requested merely for reopening that tab within the same
-    running session — cleared only on Obsidian restart or plugin
-    reload/disable-enable. A "Test connection" button in the settings tab
-    fires the identity check (`GET /user`) against whatever is currently
-    held, before anything downstream can rely on it.
-    This RESOLVES the `tokenStorageMode` question raised earlier by
-    removing it rather than answering it: no persisted secret means no
-    plaintext-vs-`safeStorage` decision and no vault-sync-replication
-    exposure to weigh.
-    The `GL_*` naming matches this repo's dev-time `.env` convention for
-    readability, but this is NOT a dotenv load — Obsidian has no dotenv
-    runtime, and hand-editing a text file would contradict the product
-    thesis. These are in-memory JS fields populated by form inputs,
-    nothing else; do not let the naming similarity suggest the shipped
-    plugin reads `plugin/.env`.
-    Consequence: "Connected as ..." must be re-established at least once
-    per Obsidian launch, and every submit/list/etc. action depends on
-    these three fields being populated for that session. An action
-    attempted before pasting them (or after a restart with nothing
-    pasted yet) must fail clearly and point at the settings tab — the
-    same surface the 401-expiry failure mode above already points at.
-    OPEN SPIKE (raised 2026-08-26), NOT a reversal. The decision above
-    stands and remains in force until this spike says otherwise; do not
-    build against `secretStorage` before it is answered.
-    Obsidian's own API gained `App.secretStorage` in 1.11.4 —
-    `setSecret(id, secret)`, `getSecret(id)`, `listSecrets()` — confirmed
-    present in the `obsidian@1.13.1` typings this project builds on. It
-    did not exist when the decision above was framed, and it matters
-    because the decision resolved the storage question by removing it:
-    the two objections recorded above are plaintext-vs-`safeStorage` and
-    vault-sync replication, and BOTH are aimed at storing a secret inside
-    the vault. A first-class secret API is a third option neither
-    objection reaches, so "no persisted secret" is no longer the only way
-    to avoid them.
-    What is at stake is not tidiness. Session-only credentials mean the
-    sidebar panel's not-connected state is seen on EVERY launch by EVERY
-    user, permanently — it is the daily first impression of the plugin,
-    not an edge case. If credentials can persist safely, that state
-    becomes first-run-only and the everyday experience is a different
-    product.
-    Three unknowns, EACH of which disqualifies the option on its own if
-    it goes the wrong way. All three must be answered before adopting:
-      1. At-rest guarantees are UNDOCUMENTED. The API reference page
-         lists the three method signatures and states nothing about
-         encryption, OS keychain backing, or where the data lands.
-         Storing an access credential somewhere with unstated at-rest
-         guarantees is strictly worse than the current answer, not
-         better. Do not assume it wraps Electron `safeStorage` because
-         the name suggests it.
-      2. Sync behaviour unknown. If secrets replicate between devices,
-         the vault-sync exposure the decision above avoided returns
-         intact, and the option collapses.
-      3. Version and platform reach. The manifest currently declares
-         `minAppVersion: 0.15.0` and `isDesktopOnly: false`. Adopting
-         this forces a bump to at least 1.11.4, and mobile availability
-         is unstated — on a platform with no OS keychain access the
-         guarantee may differ from desktop even if the API is present.
-    Owner: unassigned. If this is still unanswered when credential
-    handling is next touched, answer it then rather than deferring
-    again — the cost of adopting it later is one migration, whereas the
-    cost of never checking is having shipped the daily re-entry burden
-    on an assumption that had already stopped being true.
-  - "Test connection" / git-publishing boundary: DECIDED (2026-08-24).
-    The button calls into a minimal git-publishing client — `GET /user`
-    for identity, plus `GET /projects/:id/members/all/:user_id` to read
-    the author's `access_level` (Guest/Reporter/Developer/Maintainer/
-    Owner) on `GL_PROJECT` specifically. Both results are cached on
-    `connectedAs` (username, name, accessLevel, verifiedAt) for the
-    settings tab to display — e.g. "Connected as Xaistrying — Developer
-    access." This keeps the capability boundary intact (git-publishing
-    still owns 100% of HTTP calls; platform-config's button just calls
-    into it) and the `access_level` lookup is not a throwaway extra —
-    it's half of what milestone 8's protected-branch/"Allowed to merge"
-    gating needs (the user's own access_level), so this is where that
-    half is first exercised, not invented fresh later. The other half —
-    which access levels the protected `main` branch actually allows to
-    merge — is a separate call (`GET /projects/:id/protected_branches/
-    main`) that milestone 8 still has to add; "Test connection" does not
-    fetch it, so don't treat this lookup as already answering milestone
-    8's gating question on its own.
-    CAVEAT: this surfaces the author's project ROLE, not their token's
-    exact fine-grained permission grants — GitLab has no API to
-    introspect which permission checkboxes a token was created with, so
-    "Test connection" cannot literally list the token's permissions, only
-    prove which ones work by using them (as the manual spike did) or
-    report the person's role as a proxy. Don't let settings-tab copy
-    promise more than the role display actually shows.
+  - Credentials, token type, storage, and the "Test connection" boundary now
+    live in `docs/access-tokens.md` — MOVED there 2026-08-26 to keep this file
+    under OpenSpec's context limit, verbatim and unchanged. Read it BEFORE
+    touching anything that holds, stores, or authenticates with a token.
+    What it settles: personal fine-grained tokens, one per author, never a
+    shared or project token (with the two-branch argument for why a bot
+    identity fails); the three values are held in memory for the session and
+    never written to any file; the still-OPEN `secretStorage` spike and the
+    three unknowns that each disqualify it on their own; the legacy-token
+    deprecation risk and why it is currently moot; and that "Test connection"
+    reads identity plus project role through git-publishing, which owns every
+    request — surfacing a ROLE, never the token's actual grants.
   - Treat plugin data storage (submission-tracking state, once that
     capability lands) as plaintext by default. Flag explicitly before
     persisting anything else. Does not apply to credentials, which are
@@ -596,8 +517,41 @@ context: |
     all seven confirmed, none conditional. Required fields must be
     present and non-empty
     before a note can be submitted; validation happens in the plugin with
-    an inline prompt, not as a CI failure after the fact. `doc_id` is
-    plugin-generated and immutable — the author never edits it.
+    an inline prompt, not as a CI failure after the fact.
+    WHO WRITES WHAT, AND WHEN — AMENDED 2026-08-26. The clause "`doc_id`
+    is plugin-generated and immutable — the author never edits it" is
+    superseded by the `doc_id` decision above: it is the author's own
+    filename, snapshotted by the plugin. The full split:
+      - at creation (milestone 3), plugin-written, never re-asserted:
+        `owner`, `created`, `last_reviewed`, `lifecycle`.
+      - at first submit (milestone 4): `title` and `category` from the
+        author, `doc_id` snapshotted from the filename.
+      - by hand, by the author, at any time thereafter, with the plugin
+        never writing again: `title`, `category`, `lifecycle`,
+        `last_reviewed`, `owner`.
+    `title` IS NOT THE FILENAME, and the two are deliberately allowed to
+    differ. The filename is the control ID —
+    `SBT-KE-001_EG95-mTLS-Socket-Reopen-Error200.md`; `title` is what a
+    human reads — "CEPAS 3 Payments Fail with Error 200". Splitting them
+    is what lets the filename be a frozen identifier while the title
+    stays freely editable, and it is why there is no drift between them
+    to prevent.
+  - `category` IS ONE OF NINE FIXED DELIVERABLES, and has NO MECHANICAL
+    ROLE. DECIDED 2026-08-26. The values: User Manual, Operational
+    Manual, Release FAQ, SOP, Runbook, Configuration Reference,
+    Diagnostic Reference, Known Errors, Safe-Action Boundaries. The list
+    is closed — a tenth deliverable means shipping a plugin update.
+    It does not route, does not name anything, and does not gate. An
+    earlier design had it deriving the remote path (`docs/<category>/…`);
+    the vault-mirroring decision above superseded that and nothing
+    replaced it. Written down so that nobody later sees nine tidy enum
+    values and rebuilds routing on them.
+    Where `category` and the folder disagree — a note in `Known-errors/`
+    declaring `category: SOP` — the plugin does NOT block. The folder
+    decides the file's location because it IS the location; the field is
+    editorial classification, and a reviewer catches the mismatch during
+    review. Deliberately human-in-the-loop rather than plugin logic
+    reconciling two things that were never mechanically linked.
   - `owner` is KEPT. DECIDED 2026-08-26, resolving what was an open
     question scoped to doc-authoring. It is autofilled from the
     authenticated identity when the note is created, and the plugin never
@@ -619,6 +573,15 @@ context: |
     authenticated identity comes from the retained connection state, so a
     note cannot be created before a successful connection check in that
     session.
+    THE VALUE IS `identity.username`, and nothing else. DECIDED
+    2026-08-26. `GET /user` returns it as a first-class field and
+    milestone 2 already retains it. REJECTED: deriving it from the
+    account's email by stripping the domain. A GitLab username is not
+    the email local-part — `ivan.nguyen@…` may perfectly well be
+    username `inguyen` — so the derived string looks right and resolves
+    to no account. It would also make the field depend on reading the
+    email, a permission that may not be granted and that, per gate 2,
+    cannot be checked in advance.
   - `owner` MEANS "WHO IS RESPONSIBLE FOR IT", not "who created it".
     DECIDED 2026-08-26, closing what was recorded as an open question the
     day it was raised.
@@ -681,6 +644,24 @@ context: |
     two different lifecycles on two different axes, and doc-authoring and
     submission-tracking must not both be built against a field of the
     same name meaning different things.
+    AMENDED 2026-08-26: the plugin DOES write it once, at creation, as
+    `lifecycle: active`. "The author owns this field and edits it by
+    hand; the plugin never writes it" was aimed at the plugin
+    RE-ASSERTING the value later — the same distinction the `owner`
+    decision draws — not at leaving a required enum blank so that every
+    author's first act is typing one of three legal values into it.
+    Written once at creation, never written again.
+    REJECTED: `lifecycle: draft` at creation, flipping to `active` on
+    merge. It reintroduces the exact word banned two sentences up, it
+    merges the editorial axis back into the submission axis, and it lands
+    workflow state in front matter, which the rule above forbids
+    outright. All three of that rule's stated failure modes fire, and the
+    stale-value one fires every review round after the first, since a
+    revision of a published document submits carrying `active` while its
+    merge request is still open. It also carries no information: "not
+    merged yet" is already `unsubmitted`, tracked in plugin data.
+    "Draft" survives as an author-facing DISPLAY label for the
+    `unsubmitted` submission state. It is never written to YAML.
   - Project and plugin identity: the repository, the npm package, and the
     manifest `id` are all `obsidian-docs-publisher`. The display name is
     "Docs Publisher". Chosen to be platform-agnostic — not `gitlab-*`,

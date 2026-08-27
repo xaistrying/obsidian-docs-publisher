@@ -1,52 +1,4 @@
-# Plugin Shell Specification
-
-## Purpose
-
-This capability defines the foundational plugin shell: the core infrastructure that allows the Obsidian plugin to load, register a sidebar view, and expose entry points for opening that view. This is the baseline all future plugin capabilities are built upon.
-
-## Requirements
-
-### Requirement: Plugin loads without error
-The plugin SHALL load successfully when enabled in Obsidian, registering
-its sidebar view type without throwing an error or preventing other
-plugins from loading.
-
-#### Scenario: Plugin enabled in a vault
-- **WHEN** a user enables the plugin in Obsidian's Community Plugins settings
-- **THEN** the plugin loads without error and no error notice appears
-
-### Requirement: Sidebar view opens from the ribbon icon
-The plugin SHALL add a ribbon icon that opens the plugin's sidebar view
-in the right sidebar when clicked.
-
-#### Scenario: Clicking the ribbon icon with the view closed
-- **WHEN** the user clicks the plugin's ribbon icon and the sidebar view is not currently open
-- **THEN** the sidebar view opens in the right sidebar and becomes the active leaf
-
-### Requirement: Sidebar view opens from the command palette
-The plugin SHALL register a command, discoverable in the command
-palette, that opens the same sidebar view as the ribbon icon.
-
-#### Scenario: Running the command with the view closed
-- **WHEN** the user runs the plugin's command from the command palette and the sidebar view is not currently open
-- **THEN** the sidebar view opens in the right sidebar, identical to clicking the ribbon icon
-
-### Requirement: Opening the view never creates a duplicate panel
-The plugin SHALL reveal the existing instance of the sidebar view rather
-than opening a second one, regardless of which entry point is used or
-how many times it is triggered.
-
-#### Scenario: Triggering either entry point while the view is already open
-- **WHEN** the sidebar view is already open and the user clicks the ribbon icon or runs the command again
-- **THEN** the existing view is revealed and no additional panel is created
-
-#### Scenario: Alternating entry points
-- **WHEN** the user opens the view via the ribbon icon, then triggers the command palette entry
-- **THEN** the same single view instance is revealed, not a second one
-
-#### Scenario: Two triggers in rapid succession from a closed state
-- **WHEN** the view is closed and the user triggers either entry point twice in immediate succession, faster than the first open completes
-- **THEN** exactly one panel exists afterwards
+## MODIFIED Requirements
 
 ### Requirement: The sidebar view shows the current connection state
 The plugin's sidebar view SHALL render the plugin's current connection state
@@ -87,9 +39,9 @@ When the author cannot work, the sidebar view SHALL say why in a sentence
 naming what to do next, and SHALL offer a control labelled "Open settings".
 It SHALL distinguish a role that grants no access from a role that grants
 reading only, and both from a failure to connect, because the author's next
-action differs in each. Where the person connected as is known, the view
-SHALL still name them, so the author can see that their details were accepted
-and their role is the obstacle.
+action differs in each. Where the person connected as is known, the view SHALL
+still name them, so the author can see that their details were accepted and
+their role is the obstacle.
 
 #### Scenario: The role grants no access to the project's documents
 - **WHEN** a connection check has succeeded but the author's role on the configured project grants them no access to its documents
@@ -114,6 +66,8 @@ and their role is the obstacle.
 #### Scenario: Selecting the control from a blocked state
 - **WHEN** the author selects "Open settings" from any state in which the view offers it
 - **THEN** the plugin's settings tab is opened, or the author is told how to reach it by hand
+
+## ADDED Requirements
 
 ### Requirement: The panel offers document creation only where it can succeed
 The sidebar view SHALL offer the "New Document" control only in the state where
