@@ -2,7 +2,7 @@
   "id": "obsidian-docs-publisher",
   "name": "Docs Publisher",
   "version": "0.1.0",
-  "minAppVersion": "0.15.0",
+  "minAppVersion": "1.4.4",
   "description": "Publish SOP/Runbook documentation directly to GitLab from Obsidian",
   "author": "xaistrying",
   "isDesktopOnly": false

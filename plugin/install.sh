@@ -65,6 +65,7 @@ mkdir -p "$PLUGIN_PATH"
 # Copy essential files
 cp manifest.json "$PLUGIN_PATH/"
 cp main.js "$PLUGIN_PATH/"
+cp styles.css "$PLUGIN_PATH/" 2>/dev/null || true
 cp package.json "$PLUGIN_PATH/" 2>/dev/null || true
 cp package-lock.json "$PLUGIN_PATH/" 2>/dev/null || true
 cp tsconfig.json "$PLUGIN_PATH/" 2>/dev/null || true

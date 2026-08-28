@@ -19,6 +19,10 @@ const FAILURE_MESSAGES: Record<FailureKind, string> = {
 		'That project could not be found, or your access does not include it. Check the project ID above.',
 	'server-unreachable':
 		'Could not reach GitLab at that address. Check the address above and your connection, then try again.',
+	// Unreachable from "Test connection" itself — this check only reads, and
+	// insufficient-permission is produced solely by git-publishing's write
+	// methods. Present for the table's exhaustiveness, not for display here.
+	'insufficient-permission': "Your access token doesn't have permission to do that. Ask your admin to add it.",
 	'unexpected': 'The connection check did not succeed. Check the details above and try again.',
 };
 

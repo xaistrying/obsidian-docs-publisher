@@ -1,0 +1,22 @@
+/* Docs Publisher plugin styles. Uses Obsidian's own CSS variables throughout
+   so both are theme-aware rather than hand-picking colors/spacing. */
+
+/* The panel's action-button row(s) — "New Document" / "Submit for review"
+   together, or "Open settings" alone. A lone button still gets consistent
+   spacing and stretches to the panel's full width via the flex rule below. */
+.docs-publisher-actions {
+	display: flex;
+	flex-wrap: wrap;
+	gap: var(--size-4-2);
+	margin-top: var(--size-4-2);
+}
+
+.docs-publisher-actions button {
+	flex: 1 1 auto;
+}
+
+/* The submit modal's category dropdown. Fixed width so the row's right edge
+   stays put regardless of which category is selected — see submit-modal.ts. */
+.docs-publisher-submit-modal .docs-publisher-category-select {
+	width: 15em;
+}

@@ -7,6 +7,9 @@
  * first keystroke.
  */
 
+import type { App, TFile } from 'obsidian';
+import type { Category } from './categories';
+
 /**
  * A calendar date in `YYYY-MM-DD` form, read from the author's own clock.
  *
@@ -51,4 +54,27 @@ export function composeFrontMatter(username: string, date: Date): string {
 
 function pad(value: number): string {
 	return value < 10 ? `0${value}` : `${value}`;
+}
+
+/**
+ * Completes the front matter contract at first submit: `title`, `category`
+ * and `doc_id`, written together and only once. Callers must only invoke
+ * this after both the remote commit and the merge request have succeeded —
+ * see `submit-document.ts` — never speculatively, since there is no
+ * rollback path for a value written here and then undone.
+ *
+ * Goes through `FileManager.processFrontMatter`, unlike `composeFrontMatter`
+ * above: the note already exists by the time this runs, so there is no
+ * "empty note, then rewrite" problem to avoid.
+ */
+export async function writeSubmissionFrontMatter(
+	app: App,
+	file: TFile,
+	fields: { title: string; category: Category; docId: string }
+): Promise<void> {
+	await app.fileManager.processFrontMatter(file, (frontmatter) => {
+		frontmatter.title = fields.title;
+		frontmatter.category = fields.category;
+		frontmatter.doc_id = fields.docId;
+	});
 }

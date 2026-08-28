@@ -14,11 +14,16 @@ export interface ConnectionDetails {
 /**
  * How a failed call is described to callers. This says which kind of failure
  * happened; the caller decides what the author is told.
+ *
+ * `insufficient-permission` is produced only by the write methods below: the
+ * two read methods have nowhere a fine-grained token's scope can bite, so
+ * their existing three kinds are unchanged.
  */
 export type FailureKind =
 	| 'rejected-credential'
 	| 'not-reachable'
 	| 'server-unreachable'
+	| 'insufficient-permission'
 	| 'unexpected';
 
 export interface Identity {
@@ -33,9 +38,20 @@ export interface ProjectAccess {
 	accessLabel: string;
 }
 
+export interface CommitResult {
+	id: string;
+}
+
+export interface MergeRequestResult {
+	iid: number;
+}
+
 export type ClientResult<T> =
 	| { ok: true; value: T }
-	| { ok: false; failure: FailureKind };
+	// `detail` carries GitLab's reported permission name on the
+	// insufficient-permission kind; absent for every other kind and when the
+	// response didn't parse as expected. See `extractPermissionDetail`.
+	| { ok: false; failure: FailureKind; detail?: string };
 
 // GitLab's fixed access-level enum. Naming a level is protocol knowledge, so
 // the mapping lives here rather than in the settings tab that renders it.
@@ -114,6 +130,86 @@ function highestAccessLevel(permissions: unknown): number | null {
 	return highest;
 }
 
+/**
+ * Creates a new branch and commits one file to it in a single call. The
+ * branch is created from the project's default branch, never from the given
+ * branch name (which does not exist yet) — see `docs/document-identity.md`
+ * §1 for why the branch itself is a snapshot, not a derivation.
+ */
+async function createBranchWithCommit(
+	details: ConnectionDetails,
+	params: { branch: string; filePath: string; content: string }
+): Promise<ClientResult<CommitResult>> {
+	const defaultBranch = await getDefaultBranch(details);
+	if (!defaultBranch.ok) {
+		return defaultBranch;
+	}
+
+	const result = await post(details, `/projects/${encodeProject(details.projectId)}/repository/commits`, {
+		branch: params.branch,
+		start_branch: defaultBranch.value,
+		commit_message: `Add ${params.filePath}`,
+		actions: [{ action: 'create', file_path: params.filePath, content: params.content }],
+	});
+	if (!result.ok) {
+		return result;
+	}
+
+	const id = (result.value as Partial<{ id: string }>).id;
+	if (typeof id !== 'string') {
+		return { ok: false, failure: 'unexpected' };
+	}
+
+	return { ok: true, value: { id } };
+}
+
+/** Opens a merge request from `sourceBranch` against the project's default branch. */
+async function createMergeRequest(
+	details: ConnectionDetails,
+	params: { sourceBranch: string; title: string }
+): Promise<ClientResult<MergeRequestResult>> {
+	const defaultBranch = await getDefaultBranch(details);
+	if (!defaultBranch.ok) {
+		return defaultBranch;
+	}
+
+	const result = await post(details, `/projects/${encodeProject(details.projectId)}/merge_requests`, {
+		source_branch: params.sourceBranch,
+		target_branch: defaultBranch.value,
+		title: params.title,
+	});
+	if (!result.ok) {
+		return result;
+	}
+
+	const iid = (result.value as Partial<{ iid: number }>).iid;
+	if (typeof iid !== 'number') {
+		return { ok: false, failure: 'unexpected' };
+	}
+
+	return { ok: true, value: { iid } };
+}
+
+/**
+ * Both write methods need the project's default branch and neither is
+ * handed one — a plain read, classified through the existing read path
+ * rather than the write one, since a fine-grained token's write scope has
+ * nothing to do with whether the project itself can be read.
+ */
+async function getDefaultBranch(details: ConnectionDetails): Promise<ClientResult<string>> {
+	const result = await get(details, `/projects/${encodeProject(details.projectId)}`);
+	if (!result.ok) {
+		return result;
+	}
+
+	const defaultBranch = (result.value as { default_branch?: unknown }).default_branch;
+	if (typeof defaultBranch !== 'string' || defaultBranch === '') {
+		return { ok: false, failure: 'unexpected' };
+	}
+
+	return { ok: true, value: defaultBranch };
+}
+
 async function get(details: ConnectionDetails, path: string): Promise<ClientResult<unknown>> {
 	const url = `${normalizeHost(details.host)}/api/v4${path}`;
 
@@ -128,14 +224,54 @@ async function get(details: ConnectionDetails, path: string): Promise<ClientResu
 	} catch (error) {
 		const status = statusFromError(error);
 		const failure = status === null ? 'server-unreachable' : classifyStatus(status);
-		logFailure(url, status, failure, error);
+		logFailure('GET', url, status, failure, error);
 		return { ok: false, failure };
 	}
 
 	if (response.status < 200 || response.status >= 300) {
 		const failure = classifyStatus(response.status);
-		logFailure(url, response.status, failure, bodyPreview(response));
+		logFailure('GET', url, response.status, failure, bodyPreview(response));
 		return { ok: false, failure };
+	}
+
+	try {
+		return { ok: true, value: response.json };
+	} catch {
+		return { ok: false, failure: 'unexpected' };
+	}
+}
+
+/**
+ * The write counterpart to `get`. Classifies through `classifyWriteStatus`
+ * rather than `classifyStatus` — a write's 403 means something different
+ * from a read's — and, only on that insufficient-permission kind, attempts
+ * to carry GitLab's reported permission name through to the caller.
+ */
+async function post(details: ConnectionDetails, path: string, body: unknown): Promise<ClientResult<unknown>> {
+	const url = `${normalizeHost(details.host)}/api/v4${path}`;
+
+	let response: RequestUrlResponse;
+	try {
+		response = await requestUrl({
+			url,
+			method: 'POST',
+			contentType: 'application/json',
+			headers: { 'PRIVATE-TOKEN': details.token.trim() },
+			body: JSON.stringify(body),
+			throw: false,
+		});
+	} catch (error) {
+		const status = statusFromError(error);
+		const failure = status === null ? 'server-unreachable' : classifyWriteStatus(status);
+		logFailure('POST', url, status, failure, error);
+		return { ok: false, failure };
+	}
+
+	if (response.status < 200 || response.status >= 300) {
+		const failure = classifyWriteStatus(response.status);
+		const detail = failure === 'insufficient-permission' ? extractPermissionDetail(response) : undefined;
+		logFailure('POST', url, response.status, failure, bodyPreview(response));
+		return detail === undefined ? { ok: false, failure } : { ok: false, failure, detail };
 	}
 
 	try {
@@ -150,9 +286,9 @@ async function get(details: ConnectionDetails, path: string): Promise<ClientResu
  * status code. Log the detail to the developer console so a failing check is
  * still diagnosable. Never logs the token or the request headers.
  */
-function logFailure(url: string, status: number | null, failure: FailureKind, detail: unknown): void {
+function logFailure(method: string, url: string, status: number | null, failure: FailureKind, detail: unknown): void {
 	const code = status === null ? 'no response' : `HTTP ${status}`;
-	console.error(`Docs Publisher: GET ${url} — ${code}, classified as ${failure}`, detail);
+	console.error(`Docs Publisher: ${method} ${url} — ${code}, classified as ${failure}`, detail);
 }
 
 function bodyPreview(response: RequestUrlResponse): string {
@@ -171,6 +307,55 @@ function classifyStatus(status: number): FailureKind {
 		return 'not-reachable';
 	}
 	return 'unexpected';
+}
+
+/**
+ * A write's 403 means something different from a read's: `classifyStatus`
+ * folds 403 into not-reachable because a read has no scope to be missing,
+ * but a write can fail this way specifically because a fine-grained token's
+ * permissions don't cover it. See `docs/access-tokens.md` §1.
+ */
+function classifyWriteStatus(status: number): FailureKind {
+	if (status === 401) {
+		return 'rejected-credential';
+	}
+	if (status === 403) {
+		return 'insufficient-permission';
+	}
+	if (status === 404) {
+		return 'not-reachable';
+	}
+	return 'unexpected';
+}
+
+/**
+ * Best-effort extraction of the permission name GitLab names in a fine-grained
+ * token's `insufficient_granular_scope`-style error body. Confirmed on
+ * gitlab.com by the manual spike in `docs/access-tokens.md` §1; NOT yet
+ * confirmed against this project's self-managed CE 19.3.0 target instance —
+ * design.md's open question. An unrecognized shape degrades to no detail
+ * rather than guessing at a permission name; the caller still gets the
+ * insufficient-permission classification either way.
+ */
+function extractPermissionDetail(response: RequestUrlResponse): string | undefined {
+	let body: unknown;
+	try {
+		body = response.json;
+	} catch {
+		return undefined;
+	}
+
+	if (typeof body !== 'object' || body === null) {
+		return undefined;
+	}
+
+	const message = (body as Record<string, unknown>).message;
+	if (typeof message !== 'string') {
+		return undefined;
+	}
+
+	const match = /insufficient_granular_scope\D*([a-z][a-z0-9_]*)/i.exec(message);
+	return match === null ? undefined : match[1];
 }
 
 /**
@@ -208,4 +393,4 @@ function normalizeHost(host: string): string {
 	return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
 }
 
-export { getCurrentUser, getProjectAccess };
+export { getCurrentUser, getProjectAccess, createBranchWithCommit, createMergeRequest };
