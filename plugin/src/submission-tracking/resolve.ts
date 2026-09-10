@@ -26,7 +26,14 @@ export function resolveSubmissionRecord(
 	return store.get(docId) ?? null;
 }
 
-function readDocId(app: App, file: TFile): string | null {
+/**
+ * The one way the plugin reads a note's frozen `doc_id`. Exported because
+ * submit needs the same question answered before it derives one from the
+ * filename (`docs/document-identity.md` §3: the frozen value is the identity
+ * and the filename may drift away from it), and two readers of the same
+ * field would be two places for that rule to diverge.
+ */
+export function readDocId(app: App, file: TFile): string | null {
 	const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
 	const docId = frontmatter?.['doc_id'];
 	return typeof docId === 'string' && docId.trim() !== '' ? docId : null;

@@ -133,12 +133,21 @@ this call today.
 
 **Self-merge is a separate concern and CE cannot enforce it.** Approval
 rules are Premium-and-above, so nothing server-side prevents whoever holds
-merge rights from publishing their own document. If the plugin declines to
-offer Publish on a document the current user authored, that check is the
-only one that exists anywhere in the system — it is load-bearing despite
-living in the UI, and must not later be removed as redundant with GitLab.
-The governance question of whether to make that check at all is still
-open.
+merge rights from publishing their own document.
+
+**The governance question is settled: self-merge is accepted, and the
+plugin makes no check.** Decided 2026-09-09 and recorded as an
+architecture decision in `openspec/config.yaml`. The plugin performs no
+author-identity comparison on the publish path — a four-person team cannot
+absorb a publishing bottleneck whenever one person is away. This supersedes
+the note that previously stood here warning that such a check, if built,
+would be load-bearing despite living in the UI: it describes a check that
+was deliberately not built, so it is moot rather than violated.
+
+Protected-branch merge permissions remain the only real control, and they
+answer *which level* may merge — they cannot express "not the author".
+Delegating enforcement to GitLab is therefore the same choice as accepting
+self-merge, not an alternative to it.
 
 ---
 

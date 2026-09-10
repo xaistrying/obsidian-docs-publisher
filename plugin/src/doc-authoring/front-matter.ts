@@ -75,6 +75,14 @@ export async function writeSubmissionFrontMatter(
 	await app.fileManager.processFrontMatter(file, (frontmatter) => {
 		frontmatter.title = fields.title;
 		frontmatter.category = fields.category;
-		frontmatter.doc_id = fields.docId;
+		// A `doc_id` already in front matter is frozen and is never replaced,
+		// even by an identical-looking value. The caller passes the frozen one
+		// back when there is one, so this guard should be unreachable — it is
+		// here because `doc_id` is the value with no rollback path, and the
+		// invariant belongs where the write happens rather than only at the
+		// call site. See `docs/document-identity.md` §3.
+		if (typeof frontmatter.doc_id !== 'string' || frontmatter.doc_id.trim() === '') {
+			frontmatter.doc_id = fields.docId;
+		}
 	});
 }

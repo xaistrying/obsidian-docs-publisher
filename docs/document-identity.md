@@ -42,7 +42,11 @@ picking one.
   merge request is one-to-MANY, not one-to-one. `doc_id` is immutable
   but `doc/<doc_id>` is transient: created at submit, deleted on merge,
   then recreated with the identical name the next time that document is
-  revised. A living SOP is expected to go through repeated cycles —
+  revised. There is a SECOND deletion trigger, added 2026-09-09: when a
+  merge request is closed without merging, GitLab does not auto-delete
+  the branch, so the plugin deletes it itself at the next resubmit before
+  cutting fresh — see `openspec/config.yaml`'s branch-recreation decision
+  for why the plugin rather than a person, and why it is silent. A living SOP is expected to go through repeated cycles —
   that is what `lifecycle` exists for — so after the first revision
   cycle a query by `source_branch` returns several merge requests: old
   merged ones, and possibly a current open one.
@@ -170,3 +174,118 @@ picking one.
   and the author moves their local copy to match. Because `doc_id` is
   frozen in front matter, the document reconciles afterwards with
   nothing else to do.
+
+---
+
+## 5. Branch recreation — when `doc/<doc_id>` is already taken
+
+Extracted from `openspec/config.yaml` on 2026-09-09, for the same reason
+§§1-4 were extracted on 2026-08-26: resolving this decision pushed that
+file past OpenSpec's 50 KB context limit, at which point the whole field is
+silently dropped rather than truncated. It moved only once it was CLOSED —
+`openspec/config.yaml` deliberately keeps OPEN questions, because those
+belong where they will be seen. Two forward-references to "the open
+sub-question below" were corrected in the move, the resolution below having
+made them stale; nothing else was reworded.
+
+- BRANCH RECREATION — FULLY RESOLVED 2026-09-09, for submission-tracking.
+  Was an OPEN DESIGN QUESTION until that date; kept in place, answers
+  folded in, because the reasoning is what stops it being reopened.
+  The question: what happens when the plugin needs to create
+  `doc/<doc_id>` and something is already in the way. Two cases,
+  deliberately recorded together because they share a trigger and a
+  reconciliation query, and answering one without the other will produce
+  inconsistent behaviour. Both now end in the SAME action — cut
+  `doc/<doc_id>` from current `main` and open a new merge request —
+  differing only in whether something must be cleared first:
+    1. Rejected, same cycle. RESOLVED 2026-09-09, including the
+       sub-question it raised. The merge request was closed without
+       merging, and GitLab does not auto-delete the source branch on
+       close, so the branch is still alive with the old content on it.
+       DECIDED: CLOSED IS TERMINAL. A resubmission after "Not accepted"
+       starts a fresh cycle — a new merge request, cut from current
+       `main` — and never reopens the closed one.
+       REJECTED: reopening the same merge request. It drags the
+       rejection discussion into a review of different content, and it
+       only works while the source branch survives, so it needs the
+       start-fresh path built anyway as a fallback and buys a second
+       code path for it. Closing terminally instead leaves the original
+       review and its comments intact and readable in GitLab, which is
+       the audit trail that mattered.
+       CONVERGENCE, and the reason this is the simpler fork: case 1 and
+       case 2 now end in the SAME action — cut `doc/<doc_id>` from
+       current `main` and open a new merge request. Case 1 differs only
+       in what must be cleared out of the way first, answered below.
+       Milestone 7 and milestone 7a therefore share
+       one write path rather than branching on how the previous cycle
+       ended.
+       WHO DELETES THE ABANDONED BRANCH: THE PLUGIN DOES, SILENTLY, AT
+       RESUBMIT. DECIDED 2026-09-09, closing the last sub-question this
+       case had. `doc_id` is immutable, so the fresh branch needs the
+       name `doc/<doc_id>` — which the stale branch from the rejected
+       cycle still holds. Nothing else can clear it without blocking the
+       author, so the resubmit path deletes it and then cuts fresh.
+       Sequence, and the order is the whole of it: delete
+       `doc/<doc_id>`, then create it again from current `main` with the
+       author's revised content, then open a new merge request.
+       Needs no new access: deleting a NON-PROTECTED branch is within
+       Developer (30) per `docs/gitlab-roles.md` §3, the level creating
+       and submitting already require. `doc/<doc_id>` is never
+       protected — only `main` is.
+       NOTHING REVIEWABLE IS LOST, which is what makes this safe rather
+       than merely convenient. GitLab stores a closed merge request's
+       diff and its discussion independently of the source branch, so
+       the rejected cycle stays readable in GitLab after the branch is
+       gone. The only thing destroyed is a draft the author is in the
+       act of replacing.
+       SILENT ON PURPOSE. The author is not told, asked, or warned. They
+       are resubmitting a document that was not accepted; the stale
+       branch is an artefact of a mechanism the author-facing vocabulary
+       rule forbids naming to them, and there is no decision here for
+       them to make. Surfacing it would mean saying "branch" to an
+       author to explain a cleanup they did not request.
+       FAILURE ORDERING IS DELIBERATE. If the delete succeeds and the
+       create then fails, nothing is in the way and a plain retry
+       succeeds — strictly better than the reverse order, which cannot
+       even be attempted. If the delete itself fails, the resubmit stops
+       before writing anything and the author sees the ordinary
+       submit-failure message; no `doc_id` moves and no front matter
+       changes.
+       REJECTED: leaving it for a Maintainer to clear by hand in GitLab,
+       the escape hatch orphaned attachments and reorganization use. It
+       blocks a rejected author until someone else acts, which is the
+       very thing milestone 7a exists to fix and the same bottleneck
+       objection that settled the self-merge decision below.
+       REJECTED: reusing the stale branch — it splits cases 1 and 2 back
+       into two write paths and re-shows already-rejected commits to the
+       reviewer. REJECTED: suffixing the new branch `doc/<doc_id>-2` —
+       it breaks the rule in `docs/document-identity.md` §1 that the
+       branch derives from the frozen `doc_id`, and adds a document-to-
+       branch mapping to store and reconcile.
+       CONSEQUENCE FOR git-publishing: milestone 7a needs a branch-delete
+       method there. It belongs to that capability like every other remote
+       call, and its failure classifies through the write path, not the
+       read one. 7a no longer INTRODUCES it, though: the
+       fix-interrupted-submit change adds `deleteBranch` — the
+       capability's first destructive call — because completing an
+       interrupted submit needs the same delete for the same reason. 7a
+       reuses that method and supplies only the author-facing state and
+       action around it.
+    2. Published, new cycle. RESOLVED, and owned by milestone 7 as of
+       2026-08-26 — this case is no longer part of the open question.
+       The merge request merged, the branch was
+       auto-deleted, and months later the author revises the document
+       and submits again. Nothing is in the way on the remote, but the
+       name `doc/<doc_id>` now collides with the history of one or more
+       already-merged merge requests. The new branch must be cut from
+       current `main`, not from anything cached locally.
+       It was recorded here alongside case 1 because the two share a
+       trigger and a reconciliation query, and that grouping is still
+       why they must stay consistent — but it has no unresolved forks
+       of its own. Keeping it filed under an OPEN question made it look
+       blocked when it never was, which is how it went unmilestoned.
+  Both cases now resolve to the same action; what remains open is only
+  case 1's sub-question of who clears the stale branch out of the way,
+  stated above. Neither case may assume `doc_id` maps to a single merge
+  request over the document's lifetime — that holds for case 2 too, and
+  milestone 7 is the first milestone to actually exercise it.

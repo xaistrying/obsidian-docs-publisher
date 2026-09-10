@@ -19,7 +19,10 @@ so the facts are looked up once, not re-derived or guessed per session.
   here; the three independent permission gates; why a role is an optimistic
   predictor and never proof a call will succeed. Read before anything that
   shapes UI by role or gates an action on permissions.
-- `docs/document-identity.md` — what `doc_id` is and when it is frozen, how
+- `docs/document-identity.md` — §5 covers branch recreation: closed-without-
+  merge is terminal, both resubmission cases cut fresh from `main`, and the
+  plugin deletes an abandoned branch itself. Also: what `doc_id` is and when
+  it is frozen, how
   branches are named, how a note is reconnected to its merge request, and how
   remote paths are decided. Read before naming a branch, resolving a note to a
   merge request, or deciding where a file goes on the remote.

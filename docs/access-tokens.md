@@ -106,6 +106,30 @@ picking one.
   Consequence: milestone 2's settings-tab guidance flips from the
   legacy flow to the fine-grained flow — see milestone 2 above, updated
   accordingly.
+  OBSERVED PERMISSION NAMES, added 2026-09-09 while implementing
+  fix-interrupted-submit. Item (b) above leaves exact permission
+  selection to onboarding and says the setup guide will document it.
+  This is the raw material for that guide: each name below is one
+  GitLab named ITSELF in an `insufficient_granular_scope` refusal, not
+  a name read off the token screen and assumed. Discovered by removing
+  permissions one at a time and reading what the plugin reported.
+    - `Merge Request: Read`   — reading whether a merge request is open
+                                for a branch (the submit pre-flight)
+    - `Merge Request: Create` — opening the merge request
+    - `Branch: Delete`        — deleting an abandoned branch
+  `Merge Request: Create` is separate from `Merge Request: Read`, and a
+  token can hold either without the other — an author with Create but
+  not Read submits successfully the first time and then cannot submit
+  again, which reads as an intermittent fault rather than a missing
+  checkbox. Worth stating explicitly in the guide.
+  `Branch: Delete` is newly required as of fix-interrupted-submit and
+  was needed by nothing before it. Any token issued before that change
+  will lack it, and the failure surfaces only on a resubmit.
+  Not yet mapped: the permissions covering branch READ and commit
+  creation, both of which the tested tokens happened to hold throughout.
+  CAVEAT, the same one as (a): observed on gitlab.com, NOT on the
+  self-managed CE 19.3.0 target. The names are what CE should be checked
+  against, not what it is known to use.
 
 ## 2. The deprecation risk
 
