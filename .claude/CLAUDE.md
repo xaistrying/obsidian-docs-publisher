@@ -36,6 +36,14 @@ so the facts are looked up once, not re-derived or guessed per session.
   the end-to-end checks. Each item says what breaks if the assumption is
   wrong. Read before treating a platform behaviour as established; record
   results there, not in a change's tasks.
+- `docs/resubmission-lifecycle.md` — what submit actually does today across
+  every resolved document state, the hardcoded commit-action bug that blocks
+  reviving a published document, and the state-fork milestones 6/7/7a share.
+  Read before designing any resubmission path.
+- `docs/panel-tracking-scope.md` — what Reset needs versus Recover, how
+  "Your documents" narrows to active MRs, and what Discover & Import needs,
+  including the still-open legacy-content question. Read before touching the
+  document list's scope or proposing repository browsing.
 
 `openspec/config.yaml` lists these under REFERENCE DOCS and is the authority on
 project decisions; `docs/` carries the supporting detail. If a fact appears in

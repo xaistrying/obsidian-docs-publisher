@@ -53,6 +53,10 @@ context: |
     end-to-end checks. Each item says what breaks if the assumption is
     wrong. Read it before treating any platform behaviour as established,
     and record results there rather than in a change's tasks.
+  - `docs/resubmission-lifecycle.md` — the `create`-action bug blocking
+    milestone 7 and the state-fork 6/7/7a share.
+  - `docs/panel-tracking-scope.md` — milestones 5b and 9: Reset, panel
+    scope, and Discover & Import.
   When a decision in this file turns on a fact recorded in `docs/`, cite
   the doc rather than restating the fact — one copy, so the two cannot
   drift apart. Add a new doc when a subject needs more than a paragraph
@@ -121,6 +125,9 @@ context: |
      Obsidian's own New Note, it produces nothing a person can observe
      that the core app does not, and it removes the `owner` autofill
      that is the entire reason this milestone depends on milestone 2.
+  3a. Configurable default directory — ADDED. A plugin-level default
+     folder for "New Document"; unset or invalid falls back to the vault
+     root.
   4. Submit for review — the first end-to-end slice: click Submit, the
      plugin creates the branch, commits, and opens the merge request; the
      note shows "Waiting for review". UNBLOCKED (2026-08-26): the `owner`
@@ -163,6 +170,9 @@ context: |
      rule against abstractions with no user-visible surface calling them.
      Milestones 6 and 7 then inherit it for free — they commit through
      the same path.
+     CORRECTED 2026-09-12: not a hard blocker either way — 6/7 only vary
+     the verb and `start_branch`, fine against today's single-action
+     payload; if they land first, 4a generalizes their logic instead.
      Three things make this larger than "parse the file and base64 the
      images", and its design must answer all three:
        - `![[image.png]]` CONTAINS NO PATH. Obsidian resolves wikilinks
@@ -221,10 +231,26 @@ context: |
      plumbing it borrows (`findOpenMergeRequest`). Deliberately excludes
      discovering a document this vault has never had any trace of at all —
      see `openspec/changes/add-document-recovery/future-work.md`.
-  6. Send updates — resubmit after "Changes requested": edit, click Send
-     updates, it commits to the existing branch/MR and flips back to
-     pending. NOT blocked: this path has an open merge request and a live
-     branch, which the revisions rule already settles. It does depend on
+  5b. Reset, and repurpose "Your documents" — ADDED. Mirrors 5a's Recover,
+     overwrite inverted; narrows to active-MR states, with published/closed
+     moved to a second "Other documents" section for 6/7/7a's actions.
+     `docs/panel-tracking-scope.md`.
+  6. Send updates — DONE (2026-09-12, add-resubmission-lifecycle).
+     Resubmit after "Changes requested": edit, click Send update, it
+     commits to the existing branch/MR. NOT blocked: this path has an open
+     merge request and a live branch, which the revisions rule already
+     settles.
+     CORRECTED 2026-09-12, and this REVERSES a clause that stood here:
+     "and flips back to pending". It does not, and could not. A document
+     is changes-requested because its merge request carries an unresolved
+     review thread (milestone 5's mechanism), and pushing a commit does
+     not resolve a thread — only the reviewer, or the author in GitLab,
+     does. The push succeeds and the content lands regardless; the
+     DISPLAYED state is left to the next refresh, like every other state
+     change, and a document pushed while changes-requested may correctly
+     still read as changes-requested afterward. Optimistically flipping
+     the local record was rejected: it would show a state the remote does
+     not hold and take it back on the next refresh. It does depend on
      `last_commit_id`, since this is the first update to an existing file.
      Resubmitting after a document was NOT accepted is a different path —
      closed merge request, stale branch — and belongs to milestone 7a, not
@@ -241,7 +267,13 @@ context: |
      first bind, in that order, per the refuse-to-move decision below.
      It therefore also makes the reconciliation call that reads the
      remote path, which milestone 5 built.
-  7. Revise a published document — ADDED 2026-08-26, closing an oversight
+     WAS VERIFIED NOT BUILT (refused outright, nothing written); shipped
+     2026-09-12 as one change with 7 and 7a, because all three forked in
+     the same function on the same one-line bug. The pre-submit checks
+     above bind from that change onward, in the documented order, for
+     every resolved state. `docs/resubmission-lifecycle.md`.
+  7. Revise a published document — DONE (2026-09-12,
+     add-resubmission-lifecycle). ADDED 2026-08-26, closing an oversight
      rather than adding scope. A published document had no way back into
      review: milestone 6 scopes itself to an open merge request with a
      live branch, the unnumbered placeholder takes a closed merge request
@@ -291,7 +323,16 @@ context: |
      and path-mismatch checks bind here exactly as in milestone 6. If
      this lands first, it builds them and milestone 6's note above is the
      one to correct.
-  7a. Resubmit after "Not accepted" — NUMBERED 2026-09-09, having been an
+     WAS VERIFIED BROKEN: a hardcoded `action: 'create'` failed against a
+     published document's own path. FIXED 2026-09-12 — the commit verb is
+     the caller's parameter now, decided from the file's actual presence
+     on the default branch rather than assumed from the state, and an
+     update carries `last_commit_id`. `docs/resubmission-lifecycle.md` §2.
+     The note above about milestone 6 building `last_commit_id` first is
+     moot: both shipped together, in one change, for the reason that
+     section now records.
+  7a. Resubmit after "Not accepted" — DONE (2026-09-12,
+     add-resubmission-lifecycle). NUMBERED 2026-09-09, having been an
      unnumbered placeholder while the branch-recreation question was open.
      That question is now answered (closed is terminal; cut fresh from
      current `main`), which is what this milestone was waiting for.
@@ -319,6 +360,13 @@ context: |
      Depends on milestone 5 reporting closed merge requests correctly
      (hence the all-states reconciliation query), on milestone 6's update
      path, and on milestone 7's fresh-cut path.
+     WAS VERIFIED PARTIALLY BUILT: delete-then-recreate worked, but no
+     panel action triggered it — only the wordless command palette.
+     CLOSED 2026-09-12: the mechanism is untouched and the panel now
+     offers a named action for this state, as it does for the other three.
+     The two pre-submit checks bind here too, which they never did before.
+     The row this action renders on is still 5b's to relocate
+     (`docs/panel-tracking-scope.md`); this change did not move it.
   8. Review and merge — reviewer-facing pending list and a Merge action,
      gated by the real protected-branch permission check, never a role
      label. UNBLOCKED on the tier question: confirmed GitLab CE, so
@@ -340,6 +388,12 @@ context: |
      identically on every tier and never gate a merge. Reviewers editing
      an author's submission is out of scope; the escape hatch is an
      "Open in GitLab" link.
+     DEEP LINKING: whether to also offer a file-specific blob-view link
+     is undecided (`docs/resubmission-lifecycle.md` §6).
+  9. Discover & Import — ADDED. Every remote document the vault has no
+     trace of, unlike 5a's recovery. Unmilestoned until `future-work.md`
+     parked it; revisited now. Open whether the target corpus carries
+     this plugin's contract. Import, not sync. `docs/panel-tracking-scope.md`.
   Not yet milestoned, and not accidentally: multi-platform support (out of
   scope per git-publishing's capability boundary, not merely deferred),
   offline queueing (explicit non-goal), note-in-note transclusion —
@@ -468,9 +522,18 @@ context: |
     to `main`, so local and remote diverge only through the "Open in
     GitLab" escape hatch — a risk this file already accepts. A pull
     mechanism therefore drops from mandatory to optional. If one is ever
-    built, its baseline for "has unsubmitted changes" must be the last
-    content submitted FROM THIS VAULT, never the live remote file, and it
-    must also refuse while a document is awaiting review.
+    built AUTOMATICALLY or IMPLICITLY — triggered by anything other than
+    the author directly asking this one document be overwritten — its
+    baseline for "has unsubmitted changes" must be the last content
+    submitted FROM THIS VAULT, never the live remote file, and it must
+    also refuse while a document is awaiting review.
+    AMENDED 2026-09-12: governs an IMPLICIT pull; the risk is SILENT loss,
+    the same principle `last_commit_id` states for writes below.
+    Milestone 5b's Reset is not that — explicit, single-document,
+    author-confirmed, on purpose, including while pending or
+    changes-requested. EXEMPT from "must refuse while awaiting review" on
+    the condition that keeps it safe: confirm before every overwrite. An
+    automatic or scheduled pull stays bound in full.
     Struck along with the pipeline: "CI deletes the source branch" was
     redundant — GitLab auto-deletes on merge already.
   - Revisions reuse the same branch and the same merge request. A review
@@ -515,46 +578,16 @@ context: |
     merge, the plugin follows that, not the label. GitLab itself is
     still the real enforcement boundary — the plugin's UI gating is
     just UX, not a substitute for checking the permission itself.
-  - SELF-MERGE IS ACCEPTED, AND THE PLUGIN ADDS NO CHECK OF ITS OWN.
-    DECIDED 2026-09-09, resolving what was an open governance question
-    scoped to milestone 8. Self-merge is unpreventable server-side on this
-    instance — CE has no approval rules at all — so nothing stops whoever
-    holds merge rights from merging their own document, and here the L2
-    both authors and reviews.
-    The fork taken: authors keep merge rights and self-merge is a social
-    norm. REJECTED: making the Leader the sole merger, on the grounds that
-    a four-person team cannot absorb a publishing bottleneck every time
-    one person is away — the same reasoning that puts a stuck author ahead
-    of a reviewer without a Merge button in the milestone order above.
-    WHAT THIS MEANS IN CODE: the plugin performs NO author-identity
-    comparison anywhere on the merge path. It does not ask whether the
-    current user authored the document it is offering to publish. There is
-    no such check to write, and none to maintain.
-    This SUPERSEDES the conditional note that stood here, which said that
-    if the plugin declined to offer Merge on a document the current user
-    authored, that check would be load-bearing despite living in the UI
-    and must not later be removed as redundant with GitLab. That note was
-    a warning about a check this decision declines to build; it is now
-    moot rather than violated. Do not resurrect it as a data-integrity or
-    governance improvement — the bottleneck it would reintroduce is the
-    reason it was rejected.
-    UNCHANGED by this decision: the rule above. Whether Merge is OFFERED
-    is still decided solely by the protected `main` branch's merge
-    permissions for the current user, read from
-    `GET /projects/:id/protected_branches/main`, never from a role label.
-    That is a permission question, which GitLab does enforce, and the
-    plugin's reading of it remains UX in front of a real boundary.
-    ACCEPTED RISK, recorded so it reads as a choice: a document can be
-    authored, reviewed and published by the same person with nothing in
-    the system objecting. Git records who did both, unspoofably, so the
-    trail exists after the fact even though no gate exists before it.
-    Note for anyone reasoning from GitLab's feature list: APPROVAL RULES
-    ARE NOT AVAILABLE HERE. They are Premium-and-above per
-    `docs/gitlab-roles.md` §5, so "let GitLab enforce it" reduces to
-    protected-branch merge permissions alone — a control over WHICH LEVEL
-    may merge, which cannot express "not the author". Delegating
-    enforcement to GitLab is therefore the same thing as accepting
-    self-merge, not an alternative to it.
+  - Self-merge governance now lives in `docs/gitlab-roles.md` §5. MOVED
+    there 2026-09-12, verbatim and unchanged, on the same convention as
+    the branch-recreation move to `docs/document-identity.md` §5: it was
+    RESOLVED in full on 2026-09-09, and a closed decision belongs with the
+    subject it settles. Read it BEFORE building milestone 8's Merge
+    action.
+    What it settles: self-merge is accepted and the plugin adds no
+    author-identity check of its own; whether Merge is OFFERED is still
+    decided solely by the protected branch's merge permissions, never a
+    role label.
   - CODEOWNERS is a Premium feature and therefore unavailable here.
     Anything that would have relied on automatic reviewer assignment by
     folder needs another mechanism.

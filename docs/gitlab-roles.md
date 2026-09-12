@@ -133,20 +133,53 @@ this call today.
 
 **Self-merge is a separate concern and CE cannot enforce it.** Approval
 rules are Premium-and-above, so nothing server-side prevents whoever holds
-merge rights from publishing their own document.
+merge rights from publishing their own document, and here the L2 both
+authors and reviews.
 
-**The governance question is settled: self-merge is accepted, and the
-plugin makes no check.** Decided 2026-09-09 and recorded as an
-architecture decision in `openspec/config.yaml`. The plugin performs no
-author-identity comparison on the publish path — a four-person team cannot
-absorb a publishing bottleneck whenever one person is away. This supersedes
-the note that previously stood here warning that such a check, if built,
-would be load-bearing despite living in the UI: it describes a check that
-was deliberately not built, so it is moot rather than violated.
+**SELF-MERGE IS ACCEPTED, AND THE PLUGIN ADDS NO CHECK OF ITS OWN.** DECIDED
+2026-09-09, resolving what was an open governance question scoped to
+milestone 8. MOVED here from `openspec/config.yaml`'s architecture
+decisions 2026-09-12, verbatim and unchanged, on the same convention as §5's
+branch-recreation move in `docs/document-identity.md`: a closed decision
+belongs with the subject it settles, not in the roadmap file that raised it.
 
-Protected-branch merge permissions remain the only real control, and they
-answer *which level* may merge — they cannot express "not the author".
-Delegating enforcement to GitLab is therefore the same choice as accepting
+The fork taken: authors keep merge rights and self-merge is a social norm.
+REJECTED: making the Leader the sole merger, on the grounds that a
+four-person team cannot absorb a publishing bottleneck every time one
+person is away — the same reasoning that puts a stuck author ahead of a
+reviewer without a Merge button in `openspec/config.yaml`'s milestone
+order.
+
+WHAT THIS MEANS IN CODE: the plugin performs NO author-identity comparison
+anywhere on the merge path. It does not ask whether the current user
+authored the document it is offering to publish. There is no such check to
+write, and none to maintain.
+
+This SUPERSEDES a conditional note that previously stood here, which said
+that if the plugin declined to offer Merge on a document the current user
+authored, that check would be load-bearing despite living in the UI and
+must not later be removed as redundant with GitLab. That note was a warning
+about a check this decision declines to build; it is now moot rather than
+violated. Do not resurrect it as a data-integrity or governance improvement
+— the bottleneck it would reintroduce is the reason it was rejected.
+
+UNCHANGED by this decision: the rule above. Whether Merge is OFFERED is
+still decided solely by the protected `main` branch's merge permissions for
+the current user, read from `GET /projects/:id/protected_branches/main`,
+never from a role label. That is a permission question, which GitLab does
+enforce, and the plugin's reading of it remains UX in front of a real
+boundary.
+
+ACCEPTED RISK, recorded so it reads as a choice: a document can be
+authored, reviewed and published by the same person with nothing in the
+system objecting. Git records who did both, unspoofably, so the trail
+exists after the fact even though no gate exists before it.
+
+Note for anyone reasoning from GitLab's feature list: APPROVAL RULES ARE
+NOT AVAILABLE HERE. They are Premium-and-above (this section), so "let
+GitLab enforce it" reduces to protected-branch merge permissions alone — a
+control over WHICH LEVEL may merge, which cannot express "not the author".
+Delegating enforcement to GitLab is therefore the same thing as accepting
 self-merge, not an alternative to it.
 
 ---

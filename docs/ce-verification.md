@@ -209,6 +209,40 @@ merge-request-fallback path lookup (a record with no stored path).
 
 - [ ] Checked. Endpoint still served: yes / no. Permission CE names for it:
 
+### A8. The non-raw file read, and the update commit — NOT OBSERVED ANYWHERE
+
+Added by add-resubmission-lifecycle, which brought the first read of a
+file's metadata and the first commit that is not a `create`.
+
+- **Assumed:** `GET /projects/:id/repository/files/:file_path?ref=<ref>` (no
+  `/raw`) is gated by the same permission as A6's raw variant, and a commit
+  carrying `action: 'update'` with `last_commit_id` is gated by the same
+  write permission A5's `create` commit already uses — whether to an
+  existing branch (no `start_branch`) or to one created in the same call.
+  Neither has ever been refused, so neither permission has ever been named.
+  DO NOT assume A6's answer covers the first of these without checking: it is
+  a different endpoint, and a fine-grained token gates per-resource.
+- **Where it bites:** `getFileCommitId` and `commitToBranch` in
+  `gitlab-client.ts`, plus `createBranchWithCommit`'s `update` path.
+- **If it's wrong:** every resubmit of a tracked document fails as
+  insufficient-permission for a token that can submit a NEW document
+  perfectly well — a confusing split, and worth the same explicit
+  setup-guide note as A4's and A6's traps.
+- **How to check:** submit a document, merge it, then resubmit it and read
+  the console entry if it is refused. Repeat for a document left under
+  review, which exercises `commitToBranch` rather than
+  `createBranchWithCommit`.
+
+- [x] **Both endpoints are served and permitted.** OBSERVED 2026-09-12 via
+  D8's published resubmit ON GITLAB.COM, not on CE 19.3.0:
+  `getFileCommitId` and `createBranchWithCommit`'s `update` path both
+  succeeded with the Owner-level token in use. That proves
+  the endpoints exist and are reachable; it does NOT name a permission,
+  because nothing was refused. `commitToBranch` (the no-`start_branch`
+  sibling) was exercised separately the same day — see D8's
+  "Waiting for review" row — and also succeeded with the same token.
+- [ ] Permission CE names for each, from a deliberately under-scoped token:
+
 ---
 
 ## B. Response shapes the code parses
@@ -350,6 +384,68 @@ Added by add-document-recovery.
 
 - [ ] Checked. Status and body shape for both cases:
 
+### B8. The non-raw file read carries `last_commit_id`
+
+Added by add-resubmission-lifecycle.
+
+- **Assumed:** `GET /projects/:id/repository/files/:file_path?ref=<ref>`
+  returns 200 with a JSON object carrying a non-empty string
+  `last_commit_id`, and answers 404 for an absent path exactly as B7's raw
+  variant does. Note this is the opposite shape to B7: this body IS JSON, and
+  it is read through `getRaw` rather than `getRawText` for that reason.
+- **Also assumed:** a commit whose `last_commit_id` no longer matches the
+  file's current state is REJECTED with a non-2xx status rather than applied.
+  This is the whole point of sending it — an instance that ignores the field
+  would silently overwrite a reviewer's edit and nothing in the plugin would
+  notice.
+- **Where it bites:** `getFileCommitId` in `gitlab-client.ts`, and every
+  update commit that carries what it returns.
+- **If it's wrong (field absent):** the read returns `unexpected` and the
+  resubmit refuses having written nothing, with a console entry naming the
+  path and ref. A safe failure, but a dead end for the author until it is
+  fixed.
+- **If it's wrong (stale id accepted):** far worse, and silent — a
+  concurrent edit is overwritten with no error anywhere. Check this one
+  directly rather than inferring it from a successful ordinary resubmit.
+- **How to check:** read the endpoint with `curl` for a file that exists and
+  confirm `last_commit_id` is present; then take that id, change the file
+  through the web UI, and POST a commit still carrying the old id — confirm
+  it is rejected.
+
+- [x] **Field present, and the read works.** OBSERVED INDIRECTLY 2026-09-12,
+  via D8's published resubmit against `gitlab.com/styl-group1/kb-docs` — NOT
+  the target CE instance: the submit
+  completed, and it could only have done so by reading a non-empty
+  `last_commit_id` off this endpoint — `getFileCommitId` refuses the whole
+  submit and logs the path and ref when the field is missing or empty. The
+  endpoint is served, is permitted for an Owner token, and carries the field.
+  NOT observed directly with `curl`, so the exact body shape is still
+  unrecorded.
+- [x] **A stale id is actually REJECTED.** CONFIRMED 2026-09-12 on
+  gitlab.com, deliberately and outside the plugin — read the id, pushed a
+  revision from the panel to move it, then POSTed an update still carrying
+  the old id:
+
+      HTTP 400
+      {"message":"The file has changed since you started editing it:
+                  test/test-009.md"}
+
+  So the field is enforced, not merely accepted, and the `last_commit_id`
+  this change threads through every update path is a real guard rather than
+  decoration. Two earlier runs returned 201 and proved nothing: the first
+  sent an unsubstituted placeholder, the second sent an id that had never
+  gone stale. A probe that cannot fail is not evidence — the script now
+  aborts unless it has watched the id actually move.
+  NOT re-run on CE 19.3.0. Worth repeating there specifically: this is the
+  one assumption in this file whose failure mode is SILENT.
+  THE BODY TEXT IS NOW LOAD-BEARING, as of the fix this run prompted.
+  `isContentChanged` in `gitlab-client.ts` matches
+  `/changed since you started editing/i` against the message above, because a
+  400 alone cannot tell a concurrent edit from a branch that already exists.
+  If CE words it differently, or localizes it, the write is still REFUSED —
+  it just classifies as `unexpected` and the author gets the vaguer message.
+  So check the exact wording on CE, and widen the pattern if it differs.
+
 ---
 
 ## C. The changes-requested mechanism
@@ -415,6 +511,14 @@ Settings → Merge requests → **"All threads must be resolved before merging"*
 ---
 
 ## D. End-to-end checks in the running plugin
+
+> **INSTANCE USED SO FAR: `gitlab.com` (SaaS, EE).** Everything recorded as
+> observed in D8 below was run there, not against the target self-managed
+> CE 19.3.0. Per §0 that evidence does not transfer — it establishes that the
+> PLUGIN's own logic is right, which was the open question for
+> add-resubmission-lifecycle, and establishes nothing about CE. Every D8 row
+> is owed a rerun on the target instance before this file's A- and B-section
+> assumptions can be struck.
 
 These are the checks that actually prove the document-status milestone. They
 are not API probes — run them in Obsidian, against a real project, and watch
@@ -505,6 +609,146 @@ real target instance rather than only wherever they were first exercised, and
 record which of B7/A6/A7 above they end up confirming.
 
 - [ ] Passes, against this instance.
+
+### D8. Resubmission, in all four states
+
+Added by add-resubmission-lifecycle. The authoritative observable checks for
+that change (its tasks.md 7.1-7.3), recorded HERE rather than there because
+they can only be run against a real instance and because their results are
+what this file exists to hold.
+
+Take one document through each state and resubmit it from the panel button:
+
+- [x] **Waiting for review** — the revision reaches the existing review. No
+      second review is opened, and the one that exists keeps its number.
+      OBSERVED 2026-09-12, same document as the published case below:
+      "Send update" produced commit `64bf857e` — "Update test/test-008.md" —
+      on merge request !15, which stayed Open, kept its number, and went from
+      1 commit to 2 with Changes still 1. No second merge request was opened.
+      The panel showed "Your update was sent. Refresh to see where the review
+      stands." and the state stayed "Waiting for review". `commitToBranch`
+      works against this instance.
+      FOUND BY THIS RUN, and now fixed: the modal re-collected `title` and
+      `category`, and the plugin wrote both back to the note afterward —
+      a breach of `openspec/config.yaml`'s front matter contract ("the plugin
+      never writing again"), which ALSO made every revision commit the
+      PREVIOUS revision's `title`, since content is read before that write.
+      The resubmit modal is read-only now and writes nothing. RE-RUN THE
+      SAME DAY against the fix: the confirmation dialog rendered Title
+      `test-008-03` and Category `SOP` read-only — seeded from the note's
+      own front matter, with no editable control — and Submit produced a
+      third commit `4809fe48` on !15, still Changes 1, still one review.
+      The note's front matter was unchanged by the submit, which is the
+      point: there is no longer any code path that writes it on a resubmit.
+      The one-revision lag is gone with it — what reaches the remote is
+      read from the note and nothing rewrites the note afterward.
+- [~] **Changes requested** — same as above, and the document STILL reads
+      "Changes requested" after a refresh, because the review thread is
+      still open. That is correct, not a bug (design.md decision 6); it
+      moves only when the thread is resolved.
+      DETECTION AND PUSH OBSERVED 2026-09-12 on !15: a diff-line comment
+      carrying a Resolve thread button moved the panel from "Waiting for
+      review" to "Changes requested" on Refresh — a real round trip, since
+      the store held `pending` beforehand — and Send update then landed
+      commit `c31dc73d` as the fifth on !15, one review, Changes still 1,
+      no second merge request.
+      REFRESH-AFTER-PUSH CONFIRMED the same day, incidentally rather than
+      deliberately: `refreshDocumentStatuses` reconciles EVERY tracked note,
+      not only the active one, so the refreshes run while testing test-009
+      re-read test-008 from the remote too — and it kept reporting
+      changes-requested. That is the real assertion: the push did not move
+      the state and the remote agrees. (Worth noting for future runs: the
+      panel reading "Changes requested" immediately after a push proves
+      nothing on its own, since `pushUpdate` writes the resolved state into
+      the store and the panel renders from the store.)
+      STILL OWED: resolve the thread, refresh, and confirm it returns to
+      "Waiting for review". Without that half, a state that is merely STUCK
+      looks identical to one that is correct.
+      Also observed, and it belongs to §9's fix rather than here: !15's diff
+      showed `- title: "test-008"` → `+ title: test-008-03`, so the
+      committed file carries the same title as the note. The one-revision
+      lag is gone, visibly.
+- [x] **Published** — a fresh branch is cut from the current default branch,
+      the file is UPDATED rather than created (this is the bug the change
+      fixed — `docs/resubmission-lifecycle.md` §2), a new review opens, and
+      the author is told "Waiting for review".
+      OBSERVED 2026-09-12 on `gitlab.com/styl-group1/kb-docs` — NOT the
+      target CE 19.3.0 instance, so this transfers no evidence to it (§0) —
+      document `test/test-008.md`: the panel offered "Submit a new version",
+      the submit produced merge request !15 from `doc/test-008` into `main`
+      carrying exactly 1 commit and 1 changed file, and the panel then read
+      "Waiting for review" with the button changed to "Send update". The
+      update commit was ACCEPTED against a path already on `main` — which is
+      the failure this change exists to fix, and it is fixed. Note the branch
+      name is `doc/test-008`, derived from the frozen `doc_id`, even though
+      the submit carried the new title `test-008-02`: identity did not follow
+      the title, as `docs/document-identity.md` §3 requires.
+- [x] **Not accepted** — the abandoned branch is cleared, the file is
+      created, a new review opens, and the author is told "Waiting for
+      review".
+      OBSERVED 2026-09-12 on a purpose-made document, `test/test-009.md` —
+      deliberately NOT test-008, which is already on `main` and would take
+      the update path instead. !16 was closed unmerged with its branch left
+      in place; Refresh reported "Not accepted" and the panel offered
+      "Submit again"; submitting opened a NEW merge request !17 while !16
+      stayed closed, and the panel returned to "Waiting for review".
+      TWO SUB-ASSERTIONS ESTABLISHED BY INFERENCE, not by direct reading,
+      and recorded as such: (1) the stale branch really was deleted — GitLab
+      refuses to create a branch that already exists, and `start_branch` is
+      always set, so !17 existing at all means `doc/test-009` was gone
+      first; (2) the commit verb really was `create` — GitLab refuses an
+      `update` against a path that is not there, and this file was never
+      merged to `main`, so a wrong verb would have failed the commit rather
+      than producing !17. Both are one click from direct confirmation
+      (!17 → Commits: message `Add test/test-009.md`, count 1) if a later
+      reader wants it observed rather than deduced.
+
+Then the two refusals. Originally written as "attempted from a document in
+EVERY one of the four states above"; NARROWED 2026-09-12 to one state, on a
+structural argument rather than to save effort. Both checks sit in
+`performResubmit` BEFORE the switch on resolved state — duplicate, then
+resolution, then path, then the fork — so they cannot behave differently per
+state. Six of the eight runs would have re-exercised identical code. If that
+ordering ever changes, restore the four-state requirement with it:
+
+- [x] A second note carrying the same `doc_id` refuses the resubmit, names
+      the other note, and writes nothing anywhere (not to the remote, not to
+      front matter, not to `data.json`).
+      OBSERVED 2026-09-12 on gitlab.com, from a pending document: copying
+      `test/test-009.md` to `test/test-009 1.md` in Obsidian carried the
+      front matter across, `doc_id` included, and Send update from the
+      ORIGINAL refused with "Another note in this vault is the same document:
+      test/test-009 1.md. Delete that copy, or clear its document ID, then
+      submit again." The "writes nothing" half was NOT verified against the
+      remote in this run; it holds by construction, which is the stronger
+      claim anyway — this check returns before any remote call is made, and
+      the path check below returns after reads but before any write.
+- [x] A note moved since its last submission refuses the resubmit, names the
+      path to restore, and writes nothing. Repeat with a move that changes
+      only letter case — it must refuse the same way.
+      OBSERVED 2026-09-12, both halves, after deleting the duplicate above
+      (with it present the duplicate check fires first and masks this one —
+      which is the documented ordering working, not interference):
+      moving `test-009.md` to the vault root refused with "This document
+      belongs at test/test-009.md. Move the note back there, then submit
+      again."; renaming it to `Test-009.md` in the same folder refused
+      identically. The case-only half was expected to be possibly
+      untestable on Windows/WSL — it was not: Obsidian performed the rename
+      and the check caught it.
+
+- [x] The concurrent-edit guard: edit the document through the web UI while
+      the panel holds it, then resubmit. The write must be REJECTED rather
+      than overwriting the web edit. See B8, which is where this actually
+      gets decided.
+      OBSERVED 2026-09-12. Note for anyone repeating it: this CANNOT be
+      reached by editing in GitLab and then pressing Send update. The commit
+      id is read as late as possible — immediately before the write — so an
+      earlier edit is simply read as current and the write succeeds. The
+      narrow window is the code being correct, not a gap. It was exercised by
+      temporarily inserting a 30-second pause between the read and the write,
+      editing on the branch during it, and letting the write proceed: HTTP
+      400, classified `content-changed`, and the author was told someone else
+      had changed the document rather than to check their connection.
 
 ---
 
