@@ -23,6 +23,10 @@ const FAILURE_MESSAGES: Record<FailureKind, string> = {
 	// insufficient-permission is produced solely by git-publishing's write
 	// methods. Present for the table's exhaustiveness, not for display here.
 	'insufficient-permission': "Your access token doesn't have permission to do that. Ask your admin to add it.",
+	// Unreachable from "Test connection" for the same reason as the entry
+	// above: this check only reads, and content-changed is produced solely by
+	// a refused write. Present for the table's exhaustiveness.
+	'content-changed': 'Someone else changed this document. Open it in GitLab to see their changes.',
 	'unexpected': 'The connection check did not succeed. Check the details above and try again.',
 };
 

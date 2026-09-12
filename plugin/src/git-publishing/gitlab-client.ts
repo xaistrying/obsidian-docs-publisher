@@ -24,12 +24,21 @@ export interface ConnectionDetails {
  * resource the token was not granted fails this way and no amount of
  * retrying fixes it. The connection check's two reads keep the old
  * treatment deliberately — see `classifyStatus` versus `classifyScopedStatus`.
+ *
+ * `content-changed` is the `last_commit_id` guard firing: the file moved on
+ * between the caller reading its commit id and sending the write, so GitLab
+ * refused rather than overwriting someone. Its own kind rather than one more
+ * `unexpected`, because it is the one write failure where retrying is the
+ * WRONG advice — the author needs to see what changed first. OBSERVED on
+ * gitlab.com 2026-09-12: HTTP 400, body `{"message":"The file has changed
+ * since you started editing it: <path>"}`. See `isContentChanged`.
  */
 export type FailureKind =
 	| 'rejected-credential'
 	| 'not-reachable'
 	| 'server-unreachable'
 	| 'insufficient-permission'
+	| 'content-changed'
 	| 'unexpected';
 
 export interface Identity {
@@ -73,6 +82,24 @@ export interface OpenMergeRequest {
  * `getFileContent`.
  */
 export type FileContent = { exists: true; content: string } | { exists: false };
+
+/**
+ * Which verb a commit uses for the one file it writes. Decided by the
+ * CALLER from the document's resolved state, never re-derived here — this
+ * module supplies the write and has no opinion on when either verb is
+ * appropriate (`submit-document.ts` owns that; design.md decision 3).
+ */
+export type CommitAction = 'create' | 'update';
+
+/**
+ * The commit a file currently carries at a path and ref, as a THREE-WAY
+ * answer — exists-with-id, absent, or (via `ClientResult`) failed — for the
+ * same reason `FileContent` and `BranchPresence` have that shape: this gates
+ * an `update` write, and a failed read reported as absence would send a
+ * `create` at a path that already holds a file, or an update with no
+ * staleness guard at all. See `getFileCommitId`.
+ */
+export type FileCommitId = { exists: true; commitId: string } | { exists: false };
 
 /**
  * One entry from the merge-request listing, carrying only what callers need.
@@ -209,22 +236,96 @@ function highestAccessLevel(permissions: unknown): number | null {
  * branch is created from the project's default branch, never from the given
  * branch name (which does not exist yet) — see `docs/document-identity.md`
  * §1 for why the branch itself is a snapshot, not a derivation.
+ *
+ * `action` is the CALLER's decision, not this function's. It was once
+ * hardcoded to `create`, which was correct only because the one caller was a
+ * first submit; a published document's new cycle cuts from a default branch
+ * that ALREADY holds the file, and `create` against an existing path is
+ * rejected outright (`docs/resubmission-lifecycle.md` §2). An `update` carries
+ * `lastCommitId` so the write fails rather than silently overwriting a file
+ * that moved on since it was read.
  */
 async function createBranchWithCommit(
 	details: ConnectionDetails,
-	params: { branch: string; filePath: string; content: string }
+	params: {
+		branch: string;
+		filePath: string;
+		content: string;
+		action: CommitAction;
+		/** Only meaningful for `update`; see `getFileCommitId`. */
+		lastCommitId?: string;
+	}
 ): Promise<ClientResult<CommitResult>> {
 	const defaultBranch = await getDefaultBranch(details);
 	if (!defaultBranch.ok) {
 		return defaultBranch;
 	}
 
-	const result = await post(details, `/projects/${encodeProject(details.projectId)}/repository/commits`, {
+	return postCommit(details, {
 		branch: params.branch,
 		start_branch: defaultBranch.value,
-		commit_message: `Add ${params.filePath}`,
-		actions: [{ action: 'create', file_path: params.filePath, content: params.content }],
+		commit_message: commitMessage(params.action, params.filePath),
+		actions: commitActions(params),
 	});
+}
+
+/**
+ * Commits one file to a branch that ALREADY exists, creating nothing. The
+ * sibling of `createBranchWithCommit` above, and deliberately a second named
+ * function rather than a boolean flag on the first: the only difference in
+ * the payload is the absence of `start_branch`, and a call site reads better
+ * saying which of the two it means than passing `true` (design.md decision
+ * 4).
+ *
+ * This is the revision path — a document already under review, whose branch
+ * and submission both exist and must be left alone. `lastCommitId` is
+ * required rather than optional here: an update to a branch under active
+ * review is exactly where a concurrent edit can be silently overwritten.
+ */
+async function commitToBranch(
+	details: ConnectionDetails,
+	params: { branch: string; filePath: string; content: string; lastCommitId: string }
+): Promise<ClientResult<CommitResult>> {
+	return postCommit(details, {
+		branch: params.branch,
+		commit_message: commitMessage('update', params.filePath),
+		actions: commitActions({ ...params, action: 'update' }),
+	});
+}
+
+/**
+ * The one `actions: [...]` payload both commit calls build, so the two can
+ * never disagree about the shape of a write (tasks.md 1.4).
+ *
+ * `last_commit_id` is omitted rather than sent as `undefined` when there is
+ * none: GitLab rejects the key with an empty value, and a `create` has
+ * nothing for it to be stale relative to.
+ */
+function commitActions(params: {
+	action: CommitAction;
+	filePath: string;
+	content: string;
+	lastCommitId?: string;
+}): unknown[] {
+	const action: Record<string, unknown> = {
+		action: params.action,
+		file_path: params.filePath,
+		content: params.content,
+	};
+	if (params.lastCommitId !== undefined) {
+		action['last_commit_id'] = params.lastCommitId;
+	}
+
+	return [action];
+}
+
+function commitMessage(action: CommitAction, filePath: string): string {
+	return `${action === 'create' ? 'Add' : 'Update'} ${filePath}`;
+}
+
+/** POSTs a prepared commit body and reads the resulting commit id out of it. */
+async function postCommit(details: ConnectionDetails, body: unknown): Promise<ClientResult<CommitResult>> {
+	const result = await post(details, `/projects/${encodeProject(details.projectId)}/repository/commits`, body);
 	if (!result.ok) {
 		return result;
 	}
@@ -353,6 +454,59 @@ async function getFileContent(
 	}
 
 	return failureFrom(result);
+}
+
+/**
+ * Reads the commit a single file currently carries at `path` and `ref`, as
+ * the same THREE-WAY answer `getFileContent` returns — exists-with-id,
+ * absent, or failed — and for the reason stated there: the caller uses this
+ * to decide whether a write is a `create` or an `update`, and to guard that
+ * update against a file that has moved on since. A failed read treated as
+ * absence would license a `create` that cannot succeed, so only an explicit
+ * 404 is absence.
+ *
+ * Hits the NON-raw `repository/files/:file_path` endpoint, which returns a
+ * JSON envelope carrying `last_commit_id`, rather than reusing
+ * `getFileContent`'s `/raw` variant — `/raw` returns the file body and no
+ * metadata at all, so the id simply is not in that response to read.
+ * `content` comes back base64-encoded here and is deliberately ignored: the
+ * two callers that want content already have `getFileContent`, and decoding
+ * a document's whole body to read one hash would be waste.
+ *
+ * Classified through `classifyScopedStatus`, like every other per-resource
+ * read. Permission name and response shape NOT YET OBSERVED on the target
+ * instance — `docs/ce-verification.md` §A8/§B8.
+ */
+async function getFileCommitId(
+	details: ConnectionDetails,
+	params: { path: string; ref: string }
+): Promise<ClientResult<FileCommitId>> {
+	const result = await getRaw(
+		details,
+		`/projects/${encodeProject(details.projectId)}/repository/files/` +
+			`${encodeURIComponent(params.path)}?ref=${encodeURIComponent(params.ref)}`,
+		classifyScopedStatus
+	);
+	if (!result.ok) {
+		if (result.status === 404) {
+			return { ok: true, value: { exists: false } };
+		}
+
+		return failureFrom(result);
+	}
+
+	const commitId = (result.value as { last_commit_id?: unknown }).last_commit_id;
+	if (typeof commitId !== 'string' || commitId === '') {
+		// A 200 that does not carry the one field this call exists to read.
+		// Never softened to absence: the caller would then `create` over a
+		// file that is demonstrably there.
+		console.error(
+			`Docs Publisher: ${params.path} at ${params.ref} answered without a usable last_commit_id.`
+		);
+		return { ok: false, failure: 'unexpected' };
+	}
+
+	return { ok: true, value: { exists: true, commitId } };
 }
 
 /** GitLab's maximum, and what the listing asks for on every page. */
@@ -832,7 +986,7 @@ async function post(details: ConnectionDetails, path: string, body: unknown): Pr
 	}
 
 	if (response.status < 200 || response.status >= 300) {
-		const failure = classifyScopedStatus(response.status);
+		const failure = isContentChanged(response) ? 'content-changed' : classifyScopedStatus(response.status);
 		const detail = failure === 'insufficient-permission' ? extractPermissionDetail(response) : undefined;
 		logFailure('POST', url, response.status, failure, bodyPreview(response));
 		return detail === undefined ? { ok: false, failure } : { ok: false, failure, detail };
@@ -962,6 +1116,47 @@ function classifyScopedStatus(status: number): FailureKind {
  * CE 19.3.0 target instance — tracked as `docs/ce-verification.md` §B2,
  * which also records what degrades if the shape differs.
  */
+/**
+ * Whether this failed write is the `last_commit_id` guard firing rather than
+ * an ordinary bad request.
+ *
+ * Status alone cannot answer it: GitLab returns 400 for several unrelated
+ * write refusals — a branch that already exists, an `update` against a path
+ * that is not there — and reading every one of them as a concurrent edit
+ * would send the author looking for a change nobody made. So the body is
+ * inspected, the same way `extractPermissionDetail` below inspects it for a
+ * permission name.
+ *
+ * MATCHING ENGLISH PROSE IS THE WEAK PART, and it is deliberate rather than
+ * overlooked: GitLab reports this in no other machine-readable way. The
+ * degradation is safe in the direction that matters — if the wording changes
+ * or is localized this answers false, the failure classifies as `unexpected`
+ * exactly as it did before, and the write is still REFUSED. A wording change
+ * costs the author a precise message, never their colleague's edit.
+ *
+ * OBSERVED on gitlab.com 2026-09-12 (`docs/ce-verification.md` §B8); NOT yet
+ * on CE 19.3.0.
+ */
+function isContentChanged(response: RequestUrlResponse): boolean {
+	if (response.status !== 400) {
+		return false;
+	}
+
+	let body: unknown;
+	try {
+		body = response.json;
+	} catch {
+		return false;
+	}
+
+	if (typeof body !== 'object' || body === null) {
+		return false;
+	}
+
+	const message = (body as { message?: unknown }).message;
+	return typeof message === 'string' && /changed since you started editing/i.test(message);
+}
+
 function extractPermissionDetail(response: RequestUrlResponse): string | undefined {
 	let body: unknown;
 	try {
@@ -1039,5 +1234,7 @@ export {
 	deleteBranch,
 	getDefaultBranch,
 	getFileContent,
+	getFileCommitId,
+	commitToBranch,
 	getMergeRequestChangedPath,
 };

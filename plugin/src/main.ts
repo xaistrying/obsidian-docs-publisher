@@ -30,7 +30,7 @@ import {
 	refreshRecoverableDocuments as refreshRemoteRecoverableDocuments,
 } from './submission-tracking/recover';
 import { resolveSubmissionRecord } from './submission-tracking/resolve';
-import type { SubmissionRecord } from './submission-tracking/submission-record';
+import type { SubmissionRecord, SubmissionState } from './submission-tracking/submission-record';
 import { SUBMISSION_STATE_LABELS, UNSUBMITTED_LABEL } from './submission-tracking/submission-record';
 import { SubmissionStore } from './submission-tracking/submission-store';
 
@@ -39,6 +39,24 @@ const VIEW_TYPE = 'docs-publisher-view';
 const OPEN_SETTINGS_LABEL = 'Open settings';
 const NEW_DOCUMENT_LABEL = 'New Document';
 const SUBMIT_FOR_REVIEW_LABEL = 'Submit for review';
+
+/**
+ * What the submit button is called for a document that is already tracked,
+ * per state. Two actions, not four: a document still under review takes a
+ * revision on the review it already has, and a document whose review is over
+ * — published or turned down — starts a new one.
+ *
+ * Author vocabulary throughout, like `SUBMISSION_STATE_LABELS` beside it: no
+ * "branch", "commit", "merge request" or "MR". "Send update" says what
+ * reaches the reviewer without claiming the state moves, which sending a
+ * revision does not do on its own — see `UPDATE_SENT_MESSAGE`.
+ */
+const RESUBMIT_LABELS: Record<SubmissionState, string> = {
+	pending: 'Send update',
+	'changes-requested': 'Send update',
+	published: 'Submit a new version',
+	closed: 'Submit again',
+};
 const REFRESH_LABEL = 'Refresh';
 const DOCUMENTS_HEADING = 'Your documents';
 const NO_DOCUMENTS_MESSAGE = 'Nothing submitted yet. Documents you submit will be listed here.';
@@ -131,6 +149,10 @@ const PANEL_FAILURE_MESSAGES: Record<FailureKind, string> = {
 	// Unreachable via the connection check this table describes — see the
 	// matching note in settings-tab.ts. Present for exhaustiveness only.
 	'insufficient-permission': "Your access token doesn't have permission to do that. Ask your admin to add it.",
+	// Unreachable here for the same reason: this table describes a refresh,
+	// which only reads, and content-changed is produced solely by a refused
+	// write. Present for exhaustiveness only.
+	'content-changed': 'Someone else changed this document. Open it in GitLab to see their changes.',
 	'unexpected': 'The connection check did not succeed. Check your details in settings and try again.',
 };
 
@@ -386,16 +408,18 @@ class DocsPublisherView extends ItemView {
 	}
 
 	/**
-	 * Only for the currently open, unsubmitted document — per the "New
-	 * Document" section above, this whole branch already requires Developer
-	 * access. Shows nothing when no markdown note is open: submitting is an
-	 * action on the active note, not a standing panel feature.
+	 * The currently open document's own action — per the "New Document"
+	 * section above, this whole branch already requires Developer access.
+	 * Shows nothing when no markdown note is open: submitting is an action on
+	 * the active note, not a standing panel feature.
 	 *
-	 * `state` is this milestone's only reachable one, so the label rendered
-	 * here always reads "Waiting for review" — later milestones' states
-	 * (published, changes-requested, closed) are reachable only once
-	 * milestone 5's reconciliation call exists to ever move a record off
-	 * `pending`; nothing here transitions it on its own.
+	 * Every state offers one, as of add-resubmission-lifecycle. This used to
+	 * render the state label and return for any tracked document, which left
+	 * the command palette as the only way to resubmit anything and said
+	 * nothing about what resubmitting would even do
+	 * (`docs/resubmission-lifecycle.md` §4). What the action MEANS differs by
+	 * state and the label says which: a document under review takes a
+	 * revision, a finished one starts a new round.
 	 */
 	private renderSubmitSection(statusContainer: HTMLElement, actionsContainer: HTMLElement): void {
 		const file = this.app.workspace.getActiveFile();
@@ -409,13 +433,15 @@ class DocsPublisherView extends ItemView {
 				text: SUBMISSION_STATE_LABELS[record.state],
 				cls: 'setting-item-description',
 			});
-			return;
 		}
 
-		// CTA: once ready, this is the action the panel most wants pressed —
-		// matches the modal's own Submit button.
+		// One entry point for all five cases, tracked or not: the same method
+		// the command palette calls, which resolves what the document actually
+		// needs itself. The button chooses only what it is CALLED, never what it
+		// does — a panel that decided the action separately would be a second
+		// place for the four-way fork to live, and the two would drift.
 		new ButtonComponent(actionsContainer)
-			.setButtonText(SUBMIT_FOR_REVIEW_LABEL)
+			.setButtonText(record === null ? SUBMIT_FOR_REVIEW_LABEL : RESUBMIT_LABELS[record.state])
 			.setCta()
 			.onClick(() => {
 				this.submitForReview();

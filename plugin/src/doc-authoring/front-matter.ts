@@ -9,6 +9,7 @@
 
 import type { App, TFile } from 'obsidian';
 import type { Category } from './categories';
+import { CATEGORIES } from './categories';
 
 /**
  * A calendar date in `YYYY-MM-DD` form, read from the author's own clock.
@@ -114,11 +115,65 @@ function yamlString(value: string): string {
 }
 
 /**
+ * The `title` and `category` a tracked note already carries, or null when
+ * either is missing, empty, or — for `category` — not one of the nine
+ * deliverables.
+ *
+ * The counterpart to `writeSubmissionFrontMatter` below, and the reason that
+ * function must not run on a resubmit. `openspec/config.yaml`'s front matter
+ * contract splits these three fields by WHO WRITES THEM AND WHEN: the plugin
+ * writes `title` and `category` once, at first submit, and from that moment
+ * they are "by hand, by the author, at any time thereafter, with the plugin
+ * never writing again". A resubmit therefore READS them here and shows them
+ * back read-only; it never collects them again and never writes them.
+ *
+ * Null is a refusal, not a prompt to re-collect. An author who emptied
+ * `title` by hand is told to put it back, because the alternative — asking
+ * for it and writing the answer — is the repeat write the contract forbids.
+ */
+export function readSubmissionFields(
+	app: App,
+	file: TFile
+): { title: string; category: Category } | null {
+	const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;
+	const title = frontmatter?.['title'];
+	const category = frontmatter?.['category'];
+	if (typeof title !== 'string' || title.trim() === '') {
+		return null;
+	}
+
+	if (typeof category !== 'string' || !isCategory(category)) {
+		return null;
+	}
+
+	return { title: title.trim(), category };
+}
+
+function isCategory(value: string): value is Category {
+	for (const category of CATEGORIES) {
+		if (category === value) {
+			return true;
+		}
+	}
+
+	return false;
+}
+
+/**
  * Completes the front matter contract at first submit: `title`, `category`
  * and `doc_id`, written together and only once. Callers must only invoke
  * this after both the remote commit and the merge request have succeeded —
  * see `submit-document.ts` — never speculatively, since there is no
  * rollback path for a value written here and then undone.
+ *
+ * FIRST SUBMIT ONLY, and that is a contract rather than a convention
+ * (`openspec/config.yaml`, "WHO WRITES WHAT, AND WHEN"): after this has run
+ * once, `title` and `category` belong to the author by hand and the plugin
+ * never writes them again. Calling this on a resubmit breaks that — and did,
+ * until 2026-09-12: every resubmit rewrote both fields from a modal that had
+ * re-collected them, which also meant the content committed moments earlier
+ * carried the PREVIOUS revision's values, since it was read before this ran.
+ * A resubmit reads `readSubmissionFields` above instead and writes nothing.
  *
  * Goes through `FileManager.processFrontMatter`, unlike `composeFrontMatter`
  * above: the note already exists by the time this runs, so there is no

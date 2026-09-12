@@ -75,7 +75,7 @@ export async function reconcileDocuments(
 
 	const documents: ResolvedDocument[] = [];
 	for (const docId of docIds) {
-		const resolved = await resolveOne(details, docId, listing.value.entries);
+		const resolved = await resolveMergeRequestState(details, docId, listing.value.entries);
 		if (!resolved.ok) {
 			return resolved.detail === undefined
 				? { ok: false, failure: resolved.failure }
@@ -88,7 +88,16 @@ export async function reconcileDocuments(
 	return { ok: true, documents };
 }
 
-type ResolveOneResult =
+/**
+ * Exported as of add-resubmission-lifecycle: submit resolves ONE document's
+ * state before it writes, and does so from its own branch-filtered listing
+ * rather than this pass's project-wide one. The precedence below is shared
+ * rather than re-derived there — two independently maintained answers to
+ * "what state is this document in" is the drift `docs/resubmission-
+ * lifecycle.md` §3 flagged, and it is what the old `clearPreviousAttempt`
+ * pre-flight actually was.
+ */
+export type ResolveOneResult =
 	| { ok: true; document: ResolvedDocument }
 	| { ok: false; failure: FailureKind; detail?: string };
 
@@ -108,8 +117,15 @@ type ResolveOneResult =
  * Matching is by `doc/<doc_id>` against the source branch — never by the
  * note's file path and never by a stored record, so a renamed note and a note
  * on a machine that has never seen this document both resolve identically.
+ *
+ * `entries` is whatever listing the caller fetched: this pass hands it the
+ * project-wide one it shares across every document, and `resolveDocumentState`
+ * hands it a listing already narrowed to this one branch server-side. The
+ * filter below is therefore redundant for the second caller and kept anyway
+ * — it costs one pass over a one-element array, and it means the precedence
+ * cannot silently start resolving from an entry that is not this document's.
  */
-async function resolveOne(
+export async function resolveMergeRequestState(
 	details: ConnectionDetails,
 	docId: string,
 	entries: readonly MergeRequestSummary[]

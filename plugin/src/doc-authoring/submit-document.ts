@@ -1,24 +1,34 @@
 import { Notice } from 'obsidian';
 import type { App, TFile } from 'obsidian';
-import type { ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
+import type { CommitAction, ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
 import {
 	branchExists,
+	commitToBranch,
 	createBranchWithCommit,
 	createMergeRequest,
 	deleteBranch,
 	findOpenMergeRequest,
 	getDefaultBranch,
+	getFileCommitId,
 	getFileContent,
 } from '../git-publishing/gitlab-client';
 import type { ConnectionState } from '../platform-config/connection-state';
+import { resolveDocumentState } from '../submission-tracking/document-state';
+import { listVaultDocuments } from '../submission-tracking/document-status';
 import { branchForDocId, readDocId } from '../submission-tracking/resolve';
+import type { SubmissionState } from '../submission-tracking/submission-record';
 import { SUBMISSION_STATE_LABELS } from '../submission-tracking/submission-record';
 import type { SubmissionStore } from '../submission-tracking/submission-store';
 import { requireAuthoringGate } from './authoring-gate';
+import type { Category } from './categories';
 import type { SubmitModalResult } from './submit-modal';
 import { SubmitModal } from './submit-modal';
 import { deriveDocId } from './doc-id';
-import { withSubmissionFrontMatter, writeSubmissionFrontMatter } from './front-matter';
+import {
+	readSubmissionFields,
+	withSubmissionFrontMatter,
+	writeSubmissionFrontMatter,
+} from './front-matter';
 import { RECOVER_LABEL, recoverDocument } from './recover-document';
 
 export const NO_ACTIVE_NOTE_MESSAGE = 'Open the note you want to submit first.';
@@ -67,6 +77,14 @@ export const CLEAR_PREVIOUS_ATTEMPT_FAILED_MESSAGE =
  * genuinely different document it is how that document gets its own identity
  * — which is exactly why it was removed from the interrupted case above,
  * where the same sentence was destructive.
+ *
+ * SCOPED, as of add-resubmission-lifecycle, to the FIRST-SUBMIT path alone
+ * (tasks.md 5.1). It used to also fire when a tracked document was
+ * resubmitted while under review, which was the dead end that change
+ * removed: a resubmit pushes an update now, and cannot reach this. The hedge
+ * survives because the case that CAN still reach it genuinely is ambiguous —
+ * a note with no `doc_id` yet, whose derived branch name a stranger's
+ * document is already holding (`docs/resubmission-lifecycle.md` §5).
  */
 export const ALREADY_AWAITING_REVIEW_MESSAGE =
 	"A document with this file name is already waiting for review. If that's " +
@@ -83,6 +101,86 @@ export const ALREADY_AWAITING_REVIEW_MESSAGE =
  */
 export const ALREADY_PUBLISHED_MESSAGE =
 	'A document already exists at this location. You can recover it instead of starting a new one.';
+
+/**
+ * The first of the two checks `docs/document-identity.md` §4 requires from
+ * the second submit onward. Duplicating a note in Obsidian copies its front
+ * matter, `doc_id` included, so two notes can claim one identity — and
+ * submitting either would push one note's content under the other's name.
+ *
+ * Names the other note, because "somewhere in your vault" is not something
+ * an author can act on. Vocabulary-checked: no "branch", "commit", "merge
+ * request", "MR", "conflict", or "main".
+ */
+export function duplicateDocIdMessage(otherPath: string): string {
+	return (
+		`Another note in this vault is the same document: ${otherPath}. ` +
+		'Delete that copy, or clear its document ID, then submit again.'
+	);
+}
+
+/**
+ * The second of the two checks (`docs/document-identity.md` §4). The plugin
+ * refuses to follow a move and names the path to restore instead; the
+ * comparison is case-sensitive, because `Known-errors/` and `known-errors/`
+ * are different locations that orphan each other and that no file explorer
+ * on Windows or macOS shows the author as different.
+ */
+export function pathMismatchMessage(remotePath: string): string {
+	return `This document belongs at ${remotePath}. Move the note back there, then submit again.`;
+}
+
+/**
+ * Shown when a tracked note's `title` or `category` is missing, empty, or —
+ * for `category` — not one of the nine deliverables.
+ *
+ * A refusal and NOT a prompt, which is the whole point. Both fields are the
+ * author's own from the first submit onward and the plugin never writes them
+ * again (`openspec/config.yaml`'s front matter contract), so asking for a
+ * replacement here and saving the answer would be precisely the write that
+ * contract forbids. The author restores the field in the note; the plugin
+ * reads it.
+ *
+ * Vocabulary-checked: no "branch", "commit", "merge request", "MR",
+ * "conflict", or "main". "Front matter" is the author's own word for it —
+ * it is Obsidian's, visible in the note's own Properties panel — and is not
+ * platform vocabulary, so it is named plainly rather than talked around.
+ */
+export const INCOMPLETE_FRONT_MATTER_MESSAGE =
+	"This note's title or category is missing or not one of the nine " +
+	'categories. Fill it in on the note, then submit again.';
+
+/**
+ * The confirmation for a revision pushed to a document already under review.
+ *
+ * Deliberately NOT `SUBMISSION_STATE_LABELS.pending`. Sending an update does
+ * not itself move a document out of "Changes requested" — that state comes
+ * from unresolved review threads, which a new revision does not resolve — so
+ * claiming a state here would show the author an answer the remote has not
+ * agreed to and that the next refresh would take back (design.md decision
+ * 6). It reports what happened and points at the control that asks again.
+ */
+export const UPDATE_SENT_MESSAGE = 'Your update was sent. Refresh to see where the review stands.';
+
+/**
+ * Shown when the remote refused a write because the document changed after
+ * this plugin read it — the `last_commit_id` guard firing, which is the whole
+ * reason that value is sent. Nothing was written.
+ *
+ * Its own message rather than `SUBMIT_FAILED_MESSAGE`, on that constant's own
+ * stated criterion: it stays undifferentiated "because the author's action is
+ * the same for all of them", and here it is not. Nothing is wrong with the
+ * connection and submitting again would either fail identically or, worse,
+ * succeed and discard someone's work.
+ *
+ * It points at "Open in GitLab" and NOT at Refresh, which would be the
+ * plausible-sounding wrong advice: Refresh re-reads what STATE each document
+ * is in, and does not bring anyone else's edit into the note. Seeing the
+ * change means opening the document where the change is.
+ */
+export const CONTENT_CHANGED_MESSAGE =
+	'Someone else changed this document while you were working on it. Open it in ' +
+	'GitLab to see their changes, then submit again.';
 
 /**
  * Entry point for both the command and the panel control, so neither can
@@ -107,23 +205,46 @@ export function submitForReview(
 		return;
 	}
 
-	new SubmitModal(app, file, (result) => {
-		void performSubmit(app, details, gate, file, result, store);
-	}).open();
+	// A frozen `doc_id` wins over the live filename: it is the document's
+	// identity for the rest of its life and the filename may drift away from
+	// it (`docs/document-identity.md` §3). Read HERE, ahead of the modal,
+	// because it decides which of the modal's two shapes opens — collect the
+	// two fields, or show back the two the note already carries.
+	const existingDocId = readDocId(app, file);
+	if (existingDocId === null) {
+		new SubmitModal(app, file, (result) => {
+			void performSubmit(app, details, gate, file, result, store, null);
+		}).open();
+		return;
+	}
+
+	const existing = readSubmissionFields(app, file);
+	if (existing === null) {
+		new Notice(INCOMPLETE_FRONT_MATTER_MESSAGE);
+		return;
+	}
+
+	new SubmitModal(
+		app,
+		file,
+		(result) => {
+			void performSubmit(app, details, gate, file, result, store, existingDocId);
+		},
+		existing
+	).open();
 }
 
 /**
  * The write sequence itself: resolve `doc_id`, establish the state of the
- * target on the remote, then create the branch and commit and open the
- * merge request. Front matter and the tracking record are written only
- * after both remote writes succeed — see `front-matter.ts` and design.md's
- * ordering decision.
+ * document on the remote, then write what that state calls for. Front matter
+ * and the tracking record are written only after the remote writes succeed —
+ * see `front-matter.ts` and design.md's ordering decision.
  *
- * The pre-flight ahead of the first write is what makes an interrupted
- * submit recoverable by pressing the same button again. The choice of what
- * to do with each of its three answers stays HERE, in the file that owns
- * the sequence; `git-publishing` supplies the three calls and knows nothing
- * about when any of them is appropriate (design.md decision 8).
+ * The one fork here is first submit versus resubmit, and it turns on whether
+ * a `doc_id` is already frozen in this note's front matter. Everything below
+ * that fork is the two paths' own; what they share is `openNewCycle`, and
+ * they share it because "commit to a fresh branch, open a submission, record
+ * it" is genuinely one sequence and not three that happen to look alike.
  */
 async function performSubmit(
 	app: App,
@@ -131,38 +252,43 @@ async function performSubmit(
 	state: ConnectionState,
 	file: TFile,
 	result: SubmitModalResult,
-	store: SubmissionStore
+	store: SubmissionStore,
+	/**
+	 * The note's frozen `doc_id`, or null when it has none yet. Passed in
+	 * rather than re-read: `submitForReview` already read it to choose the
+	 * modal's shape, and reading it twice across an `await` is two chances to
+	 * get two answers for one document.
+	 *
+	 * Load-bearing rather than adjacent — without it, renaming the file
+	 * re-derives a different `doc_id`, finds an absent target, and submits the
+	 * same document a second time under a second identity, which is the
+	 * corruption this whole sequence exists to prevent.
+	 */
+	existingDocId: string | null
 ): Promise<void> {
-	// A frozen `doc_id` wins over the live filename: it is the document's
-	// identity for the rest of its life and the filename may drift away from
-	// it (`docs/document-identity.md` §3). Load-bearing here rather than
-	// adjacent — without it, renaming the file re-derives a different
-	// `doc_id`, finds an absent target, and submits the same document a
-	// second time under a second identity, which is the corruption this
-	// whole sequence exists to prevent.
-	//
-	// Kept separate from `docId` below (rather than folded into the `??`)
-	// because the path-collision pre-flight needs to know specifically
-	// whether a `doc_id` already existed — see design.md decision 5.
-	const existingDocId = readDocId(app, file);
 	const docId = existingDocId ?? deriveDocId(file.basename);
 	if (docId === null) {
 		new Notice(INVALID_FILENAME_MESSAGE);
 		return;
 	}
 
-	// add-document-recovery: runs only when no `doc_id` exists yet. A
-	// document already tracked by this vault owns its own path across every
-	// revision and cannot collide with a stranger by definition — asking
-	// this question about a document's own second submit would trivially
-	// answer yes about itself (design.md decision 5).
-	if (existingDocId === null) {
-		if (!(await checkTargetPathFree(app, details, state, file.path))) {
-			return;
-		}
+	const branch = branchForDocId(docId);
+	if (existingDocId !== null) {
+		await performResubmit(app, details, file, result, store, docId, branch);
+		return;
 	}
 
-	const branch = branchForDocId(docId);
+	// add-document-recovery's path-collision pre-flight, unchanged and still
+	// first-submit-only. A document already tracked by this vault owns its
+	// own path across every revision and cannot collide with a stranger by
+	// definition — asking this question about a document's own second submit
+	// would trivially answer yes about itself (that change's design.md
+	// decision 5). The resubmit path asks the two questions that ARE right
+	// for a second submit instead; see `performResubmit`.
+	if (!(await checkTargetPathFree(app, details, state, file.path))) {
+		return;
+	}
+
 	if (!(await clearPreviousAttempt(details, branch))) {
 		return;
 	}
@@ -182,29 +308,325 @@ async function performSubmit(
 	// string only, in memory; the note itself stays untouched until success.
 	// Not needed on a resubmission: the local content already carries all
 	// three, written after this document's own first submit.
-	const content =
-		existingDocId === null
-			? withSubmissionFrontMatter(localContent, { title: result.title, category: result.category, docId })
-			: localContent;
+	const content = withSubmissionFrontMatter(localContent, {
+		title: result.title,
+		category: result.category,
+		docId,
+	});
 
-	const commit = await createBranchWithCommit(details, { branch, filePath: file.path, content });
+	await openNewCycle(app, details, file, result, store, {
+		docId,
+		branch,
+		content,
+		action: 'create',
+		completeFrontMatter: { title: result.title, category: result.category },
+	});
+}
+
+/**
+ * The second submit onward. Asks what state this document is actually in and
+ * acts on all four answers, where the old pre-flight asked two narrower
+ * questions — does the branch exist, does it have an open submission — and
+ * had no way to express two of the four outcomes (`docs/resubmission-
+ * lifecycle.md` §1).
+ *
+ * The two pre-submit checks run FIRST, in the order
+ * `docs/document-identity.md` §4 fixes and for the reason it gives: reversed,
+ * a duplicated note reads as "moved" and the author is told to move a file
+ * that is already exactly where it belongs. Both bind for every resolved
+ * state, not for some of them — including the not-accepted path, which
+ * acquires them here for the first time.
+ */
+async function performResubmit(
+	app: App,
+	details: ConnectionDetails,
+	file: TFile,
+	result: SubmitModalResult,
+	store: SubmissionStore,
+	docId: string,
+	branch: string
+): Promise<void> {
+	// Check one. Purely local, so it costs no round trip and runs before any
+	// remote call at all — which is both what §4's ordering requires and,
+	// independently, the cheapest question to ask first.
+	const duplicate = findDuplicateNote(app, file, docId);
+	if (duplicate !== null) {
+		new Notice(duplicateDocIdMessage(duplicate.path));
+		return;
+	}
+
+	const resolved = await resolveDocumentState(details, docId);
+	if (!resolved.ok) {
+		reportFailure(resolved);
+		return;
+	}
+
+	const { document, remotePath } = resolved.value;
+
+	// Check two. A null `remotePath` means the path was never ESTABLISHED —
+	// no submission to read it from, or a submission that changed something
+	// other than exactly one file — and is never read as "no path": refusing
+	// on it would mean naming a path to restore that nobody ever read.
+	if (remotePath !== null && remotePath !== file.path) {
+		new Notice(pathMismatchMessage(remotePath));
+		return;
+	}
+
+	const content = await app.vault.read(file);
+
+	// A frozen `doc_id` the remote holds nothing for. Not one of the four
+	// tracked states and not a first submit either: the note has been through
+	// one, and whatever it produced is gone. Cut fresh, exactly as the old
+	// pre-flight did for the same case — it is what keeps an interrupted
+	// attempt recoverable by pressing the same button again.
+	if (document.submission === null) {
+		if (!(await clearPreviousAttempt(details, branch))) {
+			return;
+		}
+
+		await openNewCycle(app, details, file, result, store, { docId, branch, content, action: 'create' });
+		return;
+	}
+
+
+	const submission = document.submission;
+	switch (submission.state) {
+		case 'pending':
+		case 'changes-requested':
+			await pushUpdate(details, file, store, {
+				docId,
+				branch,
+				content,
+				state: submission.state,
+				mrIid: submission.mrIid,
+			});
+			return;
+
+		case 'published':
+		case 'closed':
+			await openFreshCycle(app, details, file, result, store, { docId, branch, content });
+			return;
+	}
+}
+
+/**
+ * A document already under review, revised. The branch and the submission
+ * both exist and are left exactly as they are: this commits to the branch and
+ * stops.
+ *
+ * `last_commit_id` is read HERE rather than carried over from the state
+ * resolution above, and the extra request is the point. Resolution reads the
+ * submission, not the file's current commit on the branch, and the two can be
+ * moments apart — a reviewer editing in the Web IDE between them is precisely
+ * the case `last_commit_id` exists to catch, and reusing a stale value would
+ * turn the guard into decoration.
+ */
+async function pushUpdate(
+	details: ConnectionDetails,
+	file: TFile,
+	store: SubmissionStore,
+	params: { docId: string; branch: string; content: string; state: SubmissionState; mrIid: number }
+): Promise<void> {
+	const current = await getFileCommitId(details, { path: file.path, ref: params.branch });
+	if (!current.ok) {
+		reportFailure(current);
+		return;
+	}
+
+	if (!current.value.exists) {
+		// The path check above passed, so either it had no remote path to
+		// compare against or the file sits elsewhere on the branch than the
+		// submission's own changed path said. Either way there is nothing here
+		// to update, and creating a second file under the same identity is the
+		// corruption this whole sequence exists to prevent.
+		console.error(
+			`Docs Publisher: ${file.path} is not on ${params.branch}; refusing to push an update for ${params.docId}.`
+		);
+		new Notice(SUBMIT_FAILED_MESSAGE);
+		return;
+	}
+
+	const commit = await commitToBranch(details, {
+		branch: params.branch,
+		filePath: file.path,
+		content: params.content,
+		lastCommitId: current.value.commitId,
+	});
 	if (!commit.ok) {
 		reportFailure(commit);
 		return;
 	}
 
-	const mergeRequest = await createMergeRequest(details, { sourceBranch: branch, title: result.title });
+	// NOTHING is written to the note here. `title` and `category` are the
+	// author's own from the first submit onward and the plugin never writes
+	// them again (`openspec/config.yaml`'s front matter contract); `doc_id` is
+	// frozen and already present. Writing them back used to happen on every
+	// resubmit, and cost more than the contract breach: the content committed
+	// moments ago was read BEFORE that write, so every revision pushed the
+	// PREVIOUS revision's `title`. Observed 2026-09-12 — see
+	// `docs/resubmission-lifecycle.md`.
+	// The state the REMOTE just reported, carried through unchanged — never
+	// set to `pending` here. A revision does not resolve an open review
+	// thread, so a document pushed while changes-requested is still
+	// changes-requested until the thread is resolved and the next refresh
+	// says so (design.md decision 6).
+	await store.save({
+		docId: params.docId,
+		branch: params.branch,
+		mrIid: params.mrIid,
+		state: params.state,
+		path: file.path,
+	});
+	new Notice(UPDATE_SENT_MESSAGE);
+}
+
+/**
+ * A new review cycle for a document whose last one is over — published, or
+ * turned down. Both cut a fresh branch from the CURRENT default branch under
+ * the same frozen identity (`docs/document-identity.md` §5) and open a new
+ * submission; what differs is only the commit verb, and that difference is
+ * read from the remote rather than inferred from the state:
+ *
+ * - published → the file IS on the default branch, so the write updates it
+ *   and carries its current commit id. Committing `create` over it is the
+ *   bug this change exists to fix (`docs/resubmission-lifecycle.md` §2).
+ * - not accepted → the file was never merged, so nothing is there and the
+ *   write creates it. There is no commit id for a `create` to be stale
+ *   relative to.
+ *
+ * Asking rather than assuming costs one read and covers the cases the state
+ * alone gets wrong: a published document whose file a Maintainer has since
+ * moved or removed, and a turned-down document whose path someone else has
+ * published into meanwhile.
+ */
+async function openFreshCycle(
+	app: App,
+	details: ConnectionDetails,
+	file: TFile,
+	result: SubmitModalResult,
+	store: SubmissionStore,
+	params: { docId: string; branch: string; content: string }
+): Promise<void> {
+	// A merged submission's branch is normally gone — GitLab deletes it — and
+	// a turned-down one's is normally still there. Neither is guaranteed, so
+	// the branch is cleared if present either way. Safe for both: resolution
+	// has just established that nothing is open from this branch, so there is
+	// no review for this delete to disturb.
+	if (!(await clearAbandonedBranch(details, params.branch))) {
+		return;
+	}
+
+	const defaultBranch = await getDefaultBranch(details);
+	if (!defaultBranch.ok) {
+		reportFailure(defaultBranch);
+		return;
+	}
+
+	const current = await getFileCommitId(details, { path: file.path, ref: defaultBranch.value });
+	if (!current.ok) {
+		reportFailure(current);
+		return;
+	}
+
+	const write: { action: CommitAction; lastCommitId?: string } = current.value.exists
+		? { action: 'update', lastCommitId: current.value.commitId }
+		: { action: 'create' };
+
+	await openNewCycle(app, details, file, result, store, { ...params, ...write });
+}
+
+/**
+ * Cut a branch, commit to it, open a submission, record it. The one sequence
+ * every path that starts a review cycle ends in — a first submit, a published
+ * document's next cycle, and a turned-down document's — so none of the three
+ * can drift from the others in what it writes or in what the author is told.
+ *
+ * `pending` is not optimistic here, unlike the revision path above: the
+ * submission was created moments ago, it is open by construction, and it
+ * cannot yet carry a review thread. It is what the remote holds.
+ */
+async function openNewCycle(
+	app: App,
+	details: ConnectionDetails,
+	file: TFile,
+	result: SubmitModalResult,
+	store: SubmissionStore,
+	params: {
+		docId: string;
+		branch: string;
+		content: string;
+		action: CommitAction;
+		lastCommitId?: string;
+		/**
+		 * The three fields to complete on the NOTE once the remote has accepted
+		 * the write — present only on a FIRST submit, which is the one moment
+		 * the plugin may write `title` and `category`. A resubmit passes
+		 * nothing: both fields are already there, are the author's by hand from
+		 * that moment on, and are never rewritten.
+		 */
+		completeFrontMatter?: { title: string; category: Category };
+	}
+): Promise<void> {
+	const commit = await createBranchWithCommit(details, {
+		branch: params.branch,
+		filePath: file.path,
+		content: params.content,
+		action: params.action,
+		...(params.lastCommitId === undefined ? {} : { lastCommitId: params.lastCommitId }),
+	});
+	if (!commit.ok) {
+		reportFailure(commit);
+		return;
+	}
+
+	const mergeRequest = await createMergeRequest(details, {
+		sourceBranch: params.branch,
+		title: result.title,
+	});
 	if (!mergeRequest.ok) {
 		reportFailure(mergeRequest);
 		return;
 	}
 
-	await writeSubmissionFrontMatter(app, file, { title: result.title, category: result.category, docId });
+	if (params.completeFrontMatter !== undefined) {
+		await writeSubmissionFrontMatter(app, file, {
+			title: params.completeFrontMatter.title,
+			category: params.completeFrontMatter.category,
+			docId: params.docId,
+		});
+	}
+
 	// `path` captured going forward as of add-document-recovery — the fast
 	// path every recovery attempt after this one prefers over the
-	// merge-request fallback (design.md decision 1).
-	await store.save({ docId, branch, mrIid: mergeRequest.value.iid, state: 'pending', path: file.path });
+	// merge-request fallback (that change's design.md decision 1).
+	await store.save({
+		docId: params.docId,
+		branch: params.branch,
+		mrIid: mergeRequest.value.iid,
+		state: 'pending',
+		path: file.path,
+	});
 	new Notice(SUBMISSION_STATE_LABELS.pending);
+}
+
+/**
+ * Any OTHER note in the vault claiming this note's `doc_id`
+ * (`docs/document-identity.md` §3-4). Compared by path rather than by
+ * identity so a note is never mistaken for its own duplicate.
+ *
+ * Reads the same vault-wide front-matter scan the panel's list is built from
+ * — Obsidian's metadata cache, already in memory — rather than the store: a
+ * duplicate created by copying a note has no record of its own, which is
+ * exactly the case this check exists to catch.
+ */
+function findDuplicateNote(app: App, file: TFile, docId: string): TFile | null {
+	for (const entry of listVaultDocuments(app)) {
+		if (entry.docId === docId && entry.file.path !== file.path) {
+			return entry.file;
+		}
+	}
+
+	return null;
 }
 
 /**
@@ -272,9 +694,10 @@ function offerRecovery(
 }
 
 /**
- * The pre-flight. Establishes which of three states `branch` is in and acts
- * on the answer, returning whether the caller may proceed to write. Every
- * `false` return has already told the author why, and has written nothing.
+ * The FIRST-SUBMIT pre-flight. Establishes which of three states `branch` is
+ * in and acts on the answer, returning whether the caller may proceed to
+ * write. Every `false` return has already told the author why, and has
+ * written nothing.
  *
  * - Absent: proceed with nothing cleared. The ordinary first submit.
  * - Present with an open submission: write and delete NOTHING. Something is
@@ -292,6 +715,14 @@ function offerRecovery(
  * mistake that would reintroduce the dead end this change removes: a token
  * that cannot read the target would license both the create that cannot
  * succeed and the delete that must not happen.
+ *
+ * NARROWED as of add-resubmission-lifecycle: this no longer runs for a
+ * document that is already tracked. `performResubmit` resolves real state
+ * instead, which answers the same two questions and two more besides — and
+ * the open-submission refusal below, which used to be a resubmit's dead end,
+ * is now only reachable where it is actually ambiguous. The one resubmit case
+ * that still comes through here is a `doc_id` the remote holds no submission
+ * for, where the questions this asks are again the right ones.
  */
 async function clearPreviousAttempt(details: ConnectionDetails, branch: string): Promise<boolean> {
 	const presence = await branchExists(details, branch);
@@ -325,6 +756,35 @@ async function clearPreviousAttempt(details: ConnectionDetails, branch: string):
 }
 
 /**
+ * `clearPreviousAttempt` without the open-submission question, for the one
+ * caller that has already had it answered: state resolution has established
+ * that this document's last cycle is over, so there is no review a delete
+ * here could disturb and no reason to spend a second read asking again.
+ *
+ * A failed presence lookup still refuses, for the reason stated above — a
+ * failure read as absence licenses a delete that must not happen.
+ */
+async function clearAbandonedBranch(details: ConnectionDetails, branch: string): Promise<boolean> {
+	const presence = await branchExists(details, branch);
+	if (!presence.ok) {
+		reportFailure(presence);
+		return false;
+	}
+
+	if (!presence.value.exists) {
+		return true;
+	}
+
+	const cleared = await deleteBranch(details, branch);
+	if (!cleared.ok) {
+		reportFailure(cleared, CLEAR_PREVIOUS_ATTEMPT_FAILED_MESSAGE);
+		return false;
+	}
+
+	return true;
+}
+
+/**
  * One undifferentiated failure per step — except the permission-scoped kind,
  * which names what's missing when GitLab reported it and which this change
  * leaves alone. No branch inspects *why* beyond that one classification.
@@ -340,6 +800,14 @@ function reportFailure(
 ): void {
 	if (result.failure === 'insufficient-permission') {
 		new Notice(insufficientPermissionMessage(result.detail, message));
+		return;
+	}
+
+	// Takes precedence over the step's own `message` rather than deferring to
+	// it, and can do so safely: only a commit can be refused this way, and no
+	// step that passes its own message sends one.
+	if (result.failure === 'content-changed') {
+		new Notice(CONTENT_CHANGED_MESSAGE);
 		return;
 	}
 
