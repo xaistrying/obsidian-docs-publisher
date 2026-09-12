@@ -7,16 +7,19 @@ import {
 	createMergeRequest,
 	deleteBranch,
 	findOpenMergeRequest,
+	getDefaultBranch,
+	getFileContent,
 } from '../git-publishing/gitlab-client';
 import type { ConnectionState } from '../platform-config/connection-state';
-import { readDocId } from '../submission-tracking/resolve';
+import { branchForDocId, readDocId } from '../submission-tracking/resolve';
 import { SUBMISSION_STATE_LABELS } from '../submission-tracking/submission-record';
 import type { SubmissionStore } from '../submission-tracking/submission-store';
 import { requireAuthoringGate } from './authoring-gate';
 import type { SubmitModalResult } from './submit-modal';
 import { SubmitModal } from './submit-modal';
 import { deriveDocId } from './doc-id';
-import { writeSubmissionFrontMatter } from './front-matter';
+import { withSubmissionFrontMatter, writeSubmissionFrontMatter } from './front-matter';
+import { RECOVER_LABEL, recoverDocument } from './recover-document';
 
 export const NO_ACTIVE_NOTE_MESSAGE = 'Open the note you want to submit first.';
 
@@ -71,6 +74,17 @@ export const ALREADY_AWAITING_REVIEW_MESSAGE =
 	'rename the file and submit again.';
 
 /**
+ * Shown when a first-time submit's target path already holds a published
+ * document — add-document-recovery's path-collision pre-flight
+ * (design.md decision 4). Offered alongside a Recover action built from the
+ * content this same check already read, so the author's next step is
+ * immediate rather than a dead end. Vocabulary-checked like everything else
+ * here: no "branch", "commit", "merge request", "MR", "conflict", or "main".
+ */
+export const ALREADY_PUBLISHED_MESSAGE =
+	'A document already exists at this location. You can recover it instead of starting a new one.';
+
+/**
  * Entry point for both the command and the panel control, so neither can
  * behave differently from the other. Gates identically to document
  * creation, then opens the modal; the remote sequence itself runs only
@@ -94,7 +108,7 @@ export function submitForReview(
 	}
 
 	new SubmitModal(app, file, (result) => {
-		void performSubmit(app, details, file, result, store);
+		void performSubmit(app, details, gate, file, result, store);
 	}).open();
 }
 
@@ -114,6 +128,7 @@ export function submitForReview(
 async function performSubmit(
 	app: App,
 	details: ConnectionDetails,
+	state: ConnectionState,
 	file: TFile,
 	result: SubmitModalResult,
 	store: SubmissionStore
@@ -125,13 +140,29 @@ async function performSubmit(
 	// `doc_id`, finds an absent target, and submits the same document a
 	// second time under a second identity, which is the corruption this
 	// whole sequence exists to prevent.
-	const docId = readDocId(app, file) ?? deriveDocId(file.basename);
+	//
+	// Kept separate from `docId` below (rather than folded into the `??`)
+	// because the path-collision pre-flight needs to know specifically
+	// whether a `doc_id` already existed — see design.md decision 5.
+	const existingDocId = readDocId(app, file);
+	const docId = existingDocId ?? deriveDocId(file.basename);
 	if (docId === null) {
 		new Notice(INVALID_FILENAME_MESSAGE);
 		return;
 	}
 
-	const branch = `doc/${docId}`;
+	// add-document-recovery: runs only when no `doc_id` exists yet. A
+	// document already tracked by this vault owns its own path across every
+	// revision and cannot collide with a stranger by definition — asking
+	// this question about a document's own second submit would trivially
+	// answer yes about itself (design.md decision 5).
+	if (existingDocId === null) {
+		if (!(await checkTargetPathFree(app, details, state, file.path))) {
+			return;
+		}
+	}
+
+	const branch = branchForDocId(docId);
 	if (!(await clearPreviousAttempt(details, branch))) {
 		return;
 	}
@@ -139,7 +170,22 @@ async function performSubmit(
 	// Read AFTER the pre-flight, not before: what reaches the remote must be
 	// the note as it stands at the moment of the successful submit, never
 	// what an earlier attempt left there.
-	const content = await app.vault.read(file);
+	const localContent = await app.vault.read(file);
+
+	// On a FIRST submit, `title`/`category`/`doc_id` are written to the LOCAL
+	// note only after the remote write below succeeds (`writeSubmissionFrontMatter`
+	// has no rollback path for `doc_id`, so it must not run speculatively).
+	// Left at that, the content actually committed here would carry none of
+	// the three — silently breaking `docs/document-identity.md` §2's "doc_id
+	// is committed with the note", which a fresh pull on a second machine (and
+	// this project's own recovery) depends on. Merged into the COMMITTED
+	// string only, in memory; the note itself stays untouched until success.
+	// Not needed on a resubmission: the local content already carries all
+	// three, written after this document's own first submit.
+	const content =
+		existingDocId === null
+			? withSubmissionFrontMatter(localContent, { title: result.title, category: result.category, docId })
+			: localContent;
 
 	const commit = await createBranchWithCommit(details, { branch, filePath: file.path, content });
 	if (!commit.ok) {
@@ -154,8 +200,75 @@ async function performSubmit(
 	}
 
 	await writeSubmissionFrontMatter(app, file, { title: result.title, category: result.category, docId });
-	await store.save({ docId, branch, mrIid: mergeRequest.value.iid, state: 'pending' });
+	// `path` captured going forward as of add-document-recovery — the fast
+	// path every recovery attempt after this one prefers over the
+	// merge-request fallback (design.md decision 1).
+	await store.save({ docId, branch, mrIid: mergeRequest.value.iid, state: 'pending', path: file.path });
 	new Notice(SUBMISSION_STATE_LABELS.pending);
+}
+
+/**
+ * The path-collision pre-flight (design.md decision 4): does a file already
+ * exist at this exact path on the project's default branch, independent of
+ * whether any branch or merge request for it still exists? Complementary to
+ * `clearPreviousAttempt` below, not a replacement for it — an open, unmerged
+ * submission's content sits on its own branch, not yet on the default one,
+ * so this correctly answers "no" for that case and the existing check still
+ * catches it. Runs first because it is the stronger signal and because it is
+ * what turns a bare refusal into an offer to recover.
+ *
+ * Exists → refuse and offer recovery, using the content this same read
+ * already has in hand — no second request to show what was just read.
+ * Absent → the path is free, proceed. Failed → refuse; a failed read is
+ * never treated as absence, the same mistake `branchExists`'s own design
+ * note warns against (design.md decision 2).
+ */
+async function checkTargetPathFree(
+	app: App,
+	details: ConnectionDetails,
+	state: ConnectionState,
+	path: string
+): Promise<boolean> {
+	const defaultBranch = await getDefaultBranch(details);
+	if (!defaultBranch.ok) {
+		reportFailure(defaultBranch);
+		return false;
+	}
+
+	const existing = await getFileContent(details, { path, ref: defaultBranch.value });
+	if (!existing.ok) {
+		reportFailure(existing);
+		return false;
+	}
+
+	if (!existing.value.exists) {
+		return true;
+	}
+
+	offerRecovery(app, details, state, path, existing.value.content);
+	return false;
+}
+
+/**
+ * The refusal notice for an already-published path, carrying the same
+ * Recover action the panel's orphaned-record list offers — `recoverDocument`
+ * itself is shared, so the author's next step is identical from either entry
+ * point (tasks.md 3.3). Left open (duration 0) since it asks for a decision
+ * rather than merely reporting one.
+ */
+function offerRecovery(
+	app: App,
+	details: ConnectionDetails,
+	state: ConnectionState,
+	path: string,
+	content: string
+): void {
+	const message = document.createDocumentFragment();
+	message.createDiv({ text: ALREADY_PUBLISHED_MESSAGE });
+	message.createEl('button', { text: RECOVER_LABEL, cls: 'mod-cta' }).addEventListener('click', () => {
+		void recoverDocument(app, details, state, path, content);
+	});
+	new Notice(message, 0);
 }
 
 /**

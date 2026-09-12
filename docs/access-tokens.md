@@ -88,7 +88,9 @@ picking one.
         instance, which is the one that actually matters — SaaS's
         fine-grained rollout is not guaranteed identical to
         Self-Managed 19.3.0. Rerun against the real instance when
-        convenient; not required before platform-config ships.
+        convenient; not required before platform-config ships. The rerun
+        is now a written checklist — `docs/ce-verification.md` §A — which
+        also carries every other gitlab.com-only finding in this file.
     (b) OWNED OPERATIONALLY, not a plugin design concern. Exact
         per-token permission selection (which checkboxes, per
         member/role) is handled during author onboarding by whoever
@@ -127,9 +129,56 @@ picking one.
   will lack it, and the failure surfaces only on a resubmit.
   Not yet mapped: the permissions covering branch READ and commit
   creation, both of which the tested tokens happened to hold throughout.
+  ADDED 2026-09-11 while implementing add-document-status, which brought
+  two new calls. Kept to the same standard as the three above — a name is
+  only listed as observed when GitLab named it itself:
+    - Listing the project's merge requests across all states
+      (`GET /projects/:id/merge_requests?state=all`) is the SAME endpoint
+      as the submit pre-flight, so it is covered by the already-observed
+      `Merge Request: Read` and adds no new checkbox.
+    - Reading a merge request's discussions
+      (`GET /projects/:id/merge_requests/:iid/discussions`) is a NEW call
+      and its permission is NOT OBSERVED. It was not exercised against a
+      token missing it, so no refusal has ever named it. `Merge Request:
+      Read` is the expectation, not a finding — the discussions endpoint
+      is a sub-resource of the merge request and nothing suggests a
+      separate permission, but that reasoning is exactly the kind this
+      section exists to distrust. Confirm it the same way the three above
+      were confirmed: remove permissions one at a time and read what the
+      plugin reports.
+  Consequence if that expectation is wrong: the document list's refresh
+  fails for any document that carries comments, while documents with none
+  resolve normally — an author would see most of their documents update
+  and the discussed ones fail, which reads as intermittent rather than as
+  a missing checkbox. The same trap `Merge Request: Create` versus
+  `Merge Request: Read` sets, and worth the same explicit note in the
+  setup guide.
   CAVEAT, the same one as (a): observed on gitlab.com, NOT on the
   self-managed CE 19.3.0 target. The names are what CE should be checked
-  against, not what it is known to use.
+  against, not what it is known to use — `docs/ce-verification.md` §A3
+  and §A4 are how to check them.
+  ADDED while implementing add-document-recovery, which brought two more
+  reads. NEITHER has ever been exercised against a token missing it, so
+  neither name below is observed — both are expectations, kept to the
+  same standard as A4 above:
+    - Reading a file's raw content at a path and ref
+      (`GET /projects/:id/repository/files/:file_path/raw`) — used by the
+      submit path-collision pre-flight and by recovery's content fetch.
+      Expected to be gated the same way `branchExists` is (repository
+      content), but that repository-read permission has never itself been
+      isolated — see A5 below, which this inherits rather than resolves.
+    - Reading which path a merge request's commit changed
+      (`GET /projects/:id/merge_requests/:iid/changes`) — used only by
+      recovery's merge-request-fallback path lookup. Expected to be
+      covered by the already-observed `Merge Request: Read`, being a
+      sub-resource of the merge request exactly as the discussions read
+      above is — same caveat: that reasoning is exactly what A4 exists to
+      distrust, and this has the same gap.
+  Consequence if either expectation is wrong: a token missing the right
+  permission sees the submit pre-flight or recovery fail as
+  insufficient-permission, and (per `docs/ce-verification.md`) whichever
+  permission name the refusal reports should be added to this file's
+  observed list rather than assumed from here.
 
 ## 2. The deprecation risk
 

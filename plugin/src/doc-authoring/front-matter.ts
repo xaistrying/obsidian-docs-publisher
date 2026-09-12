@@ -56,6 +56,63 @@ function pad(value: number): string {
 	return value < 10 ? `0${value}` : `${value}`;
 }
 
+const FRONT_MATTER_BLOCK = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
+
+/**
+ * Returns `content` with `title`, `category` and `doc_id` merged into its
+ * front matter block — a plain string operation that touches no file.
+ *
+ * Exists for exactly one caller: `submit-document.ts`'s FIRST submit, to
+ * compute what gets COMMITTED to the remote. `writeSubmissionFrontMatter`
+ * only writes these three fields to the local note after the remote write
+ * has already succeeded — correctly, since `doc_id` has no rollback path —
+ * but left at that, the content actually pushed on a first submit would
+ * carry none of the three. That silently breaks `docs/document-identity.md`
+ * §2's "doc_id is committed with the note": a document never revised again
+ * would sit on the remote missing its own identity, which is exactly what a
+ * fresh pull on a second machine, or this project's own recovery, depends
+ * on to reconnect it. This closes that gap without moving the local write
+ * earlier — the note itself is untouched here; only the string handed to
+ * the commit call is.
+ *
+ * Never called for a document that already has a `doc_id`: a resubmission's
+ * own local content already carries all three, written by
+ * `writeSubmissionFrontMatter` after the document's first submit.
+ */
+export function withSubmissionFrontMatter(
+	content: string,
+	fields: { title: string; category: Category; docId: string }
+): string {
+	const match = FRONT_MATTER_BLOCK.exec(content);
+	if (match === null) {
+		// No recognizable front matter block. Should not happen for a note this
+		// plugin created, but failing safe by leaving `content` untouched beats
+		// fabricating a block whose shape might not match what
+		// `processFrontMatter` produces for the very same note moments later.
+		return content;
+	}
+
+	const [wholeMatch, body] = match;
+	const rest = content.slice(wholeMatch.length);
+	const merged =
+		`${body}\n` +
+		`title: ${yamlString(fields.title)}\n` +
+		`category: ${fields.category}\n` +
+		`doc_id: ${fields.docId}`;
+	return `---\n${merged}\n---\n${rest}`;
+}
+
+/**
+ * A minimal double-quoted YAML scalar. `category` and `doc_id` need no
+ * escaping — the first is a fixed enum, the second already validated as
+ * git-ref-legal (`docs/document-identity.md` §3), so neither can carry a
+ * colon, a quote, or a leading special character. `title` is free-form
+ * author text and has no such guarantee, so it alone goes through this.
+ */
+function yamlString(value: string): string {
+	return `"${value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')}"`;
+}
+
 /**
  * Completes the front matter contract at first submit: `title`, `category`
  * and `doc_id`, written together and only once. Callers must only invoke

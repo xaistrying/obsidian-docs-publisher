@@ -20,3 +20,56 @@
 .docs-publisher-submit-modal .docs-publisher-category-select {
 	width: 15em;
 }
+
+/* The document list: every note carrying a doc_id, with where it stands.
+   Heading and Refresh share a row so the control sits with what it refreshes
+   rather than floating above the whole panel. */
+.docs-publisher-documents {
+	margin-top: var(--size-4-4);
+}
+
+.docs-publisher-documents-header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: var(--size-4-2);
+}
+
+.docs-publisher-documents-header h4 {
+	margin: 0;
+}
+
+.docs-publisher-document-list {
+	list-style: none;
+	margin: var(--size-4-2) 0 0;
+	padding: 0;
+}
+
+/* Name, state and link on one wrapping row. The name takes the slack so the
+   state and link stay together at the right rather than drifting apart as
+   names vary in length. */
+.docs-publisher-document {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: baseline;
+	gap: var(--size-4-1) var(--size-4-2);
+	padding: var(--size-4-1) 0;
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.docs-publisher-document-name {
+	flex: 1 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+}
+
+.docs-publisher-document-state {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+
+.docs-publisher-document-link {
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}

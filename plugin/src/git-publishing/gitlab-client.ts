@@ -66,6 +66,60 @@ export interface OpenMergeRequest {
 	iid: number;
 }
 
+/**
+ * A file's content at a specific path and ref, as a THREE-WAY answer:
+ * exists-with-content, absent, or (via `ClientResult`) failed. Mirrors
+ * `BranchPresence`'s shape and for the identical reason — see
+ * `getFileContent`.
+ */
+export type FileContent = { exists: true; content: string } | { exists: false };
+
+/**
+ * One entry from the merge-request listing, carrying only what callers need.
+ *
+ * `state` is GitLab's own string — `opened`, `closed`, `merged`, `locked` —
+ * passed through unmapped. What a state MEANS for a document is
+ * submission-tracking's to decide, not this capability's (this change's
+ * design.md decision 9), so nothing here translates it.
+ */
+export interface MergeRequestSummary {
+	iid: number;
+	state: string;
+	sourceBranch: string;
+	/** Null when the response carried no usable link. */
+	webUrl: string | null;
+	/**
+	 * How many review comments the merge request carries, or null when the
+	 * response did not report it. Null means UNKNOWN and never zero: this
+	 * gates the discussions read, and reading an unreported count as "no
+	 * comments" would skip that read and answer "no unresolved threads" for a
+	 * merge request nobody actually checked.
+	 */
+	userNotesCount: number | null;
+}
+
+/**
+ * A listing, plus whether it is the whole story.
+ *
+ * `truncated` is load-bearing rather than informational. A `doc_id` absent
+ * from a truncated listing is indistinguishable from one that was never
+ * submitted, and the second answer sends an author to submit a document that
+ * already exists — so the caller is given what it needs to refuse to resolve
+ * instead of resolving wrongly. See this change's design.md decision 2.
+ */
+export interface MergeRequestListing {
+	entries: MergeRequestSummary[];
+	truncated: boolean;
+}
+
+/** Server-side narrowing for `listMergeRequests`. Both fields are optional. */
+export interface MergeRequestQuery {
+	/** Restrict to merge requests opened from this branch. */
+	sourceBranch?: string;
+	/** Defaults to `all`, which is what reconciliation requires. */
+	state?: 'all' | 'opened';
+}
+
 export type ClientResult<T> =
 	| { ok: true; value: T }
 	// `detail` carries GitLab's reported permission name on the
@@ -230,7 +284,7 @@ async function createMergeRequest(
  * So the classification below holds there.
  *
  * STILL UNCONFIRMED against the target self-managed CE 19.3.0 instance —
- * the same deferred rerun as `docs/access-tokens.md` §1(a), and gitlab.com
+ * tracked as `docs/ce-verification.md` §B1, and gitlab.com
  * is SaaS/EE on continuous deployment, so it is not evidence for CE. If CE
  * answers 403, or 200 with an error body, this reads it as a lookup failure
  * and the submit aborts having written nothing; a surprise costs a submit
@@ -259,9 +313,255 @@ async function branchExists(
 		return { ok: true, value: { exists: false } };
 	}
 
-	return result.detail === undefined
-		? { ok: false, failure: result.failure }
-		: { ok: false, failure: result.failure, detail: result.detail };
+	return failureFrom(result);
+}
+
+/**
+ * Reads a single file's raw content at `path` and `ref` (a branch name or a
+ * commit reference), as a THREE-WAY answer — exists-with-content, absent, or
+ * failed — mirroring `branchExists`'s shape and for the identical reason
+ * stated there: a caller uses this to decide whether to proceed with a write
+ * (the submit collision pre-flight) or to recreate a note from what it
+ * returns (recovery), and a failed read reported as absence would license
+ * both incorrectly. See this change's (add-document-recovery) design.md
+ * decision 2.
+ *
+ * Classified through `classifyScopedStatus`, like `branchExists`: a
+ * fine-grained token gates this per-resource. Permission name NOT YET
+ * OBSERVED — see `docs/access-tokens.md` §1 and `docs/ce-verification.md`.
+ *
+ * Goes through `getRawText`, not `getRaw`: the raw-file endpoint's successful
+ * body is the file's own content, not JSON, and `getRaw`'s `response.json`
+ * read would misclassify every successful read as `unexpected`.
+ */
+async function getFileContent(
+	details: ConnectionDetails,
+	params: { path: string; ref: string }
+): Promise<ClientResult<FileContent>> {
+	const result = await getRawText(
+		details,
+		`/projects/${encodeProject(details.projectId)}/repository/files/` +
+			`${encodeURIComponent(params.path)}/raw?ref=${encodeURIComponent(params.ref)}`,
+		classifyScopedStatus
+	);
+	if (result.ok) {
+		return { ok: true, value: { exists: true, content: result.value } };
+	}
+
+	if (result.status === 404) {
+		return { ok: true, value: { exists: false } };
+	}
+
+	return failureFrom(result);
+}
+
+/** GitLab's maximum, and what the listing asks for on every page. */
+const MERGE_REQUESTS_PER_PAGE = 100;
+
+/**
+ * Ten pages of 100 — see design.md decision 2. Set high enough that a
+ * four-person team's corpus cannot reach it, and reaching it is reported as
+ * `truncated` rather than swallowed.
+ */
+const MERGE_REQUEST_PAGE_CAP = 10;
+
+/** The same bound for one merge request's discussions. See `hasUnresolvedThreads`. */
+const DISCUSSIONS_PAGE_CAP = 10;
+
+/**
+ * Lists the project's merge requests, newest-updated first, following
+ * pagination to `MERGE_REQUEST_PAGE_CAP`.
+ *
+ * Defaults to `state=all` deliberately: `docs/document-identity.md` §2
+ * forbids filtering to open merge requests for reconciliation, because a
+ * document whose review was closed without merging would then read as never
+ * submitted and the author's next submit would collide with the branch still
+ * sitting there.
+ *
+ * Returns raw merge requests and facts about them. It does not resolve, rank
+ * or interpret any document's state — that is submission-tracking's job
+ * (design.md decision 9).
+ *
+ * Classified through `classifyScopedStatus`: a fine-grained token gates this
+ * read per-resource and GitLab names the permission it wanted, which is how
+ * the author learns to ask for `Merge Request: Read` rather than to check
+ * their connection.
+ */
+async function listMergeRequests(
+	details: ConnectionDetails,
+	query: MergeRequestQuery = {}
+): Promise<ClientResult<MergeRequestListing>> {
+	const filters = [
+		`state=${query.state ?? 'all'}`,
+		'order_by=updated_at',
+		'sort=desc',
+		`per_page=${MERGE_REQUESTS_PER_PAGE}`,
+	];
+	if (query.sourceBranch !== undefined) {
+		filters.push(`source_branch=${encodeURIComponent(query.sourceBranch)}`);
+	}
+
+	const entries: MergeRequestSummary[] = [];
+	for (let page = 1; page <= MERGE_REQUEST_PAGE_CAP; page++) {
+		const result = await getRaw(
+			details,
+			`/projects/${encodeProject(details.projectId)}/merge_requests?${filters.join('&')}&page=${page}`,
+			classifyScopedStatus
+		);
+		if (!result.ok) {
+			return failureFrom(result);
+		}
+
+		if (!Array.isArray(result.value)) {
+			return { ok: false, failure: 'unexpected' };
+		}
+
+		for (const raw of result.value) {
+			const entry = toMergeRequestSummary(raw);
+			if (entry === null) {
+				return { ok: false, failure: 'unexpected' };
+			}
+			entries.push(entry);
+		}
+
+		// A short page is the last page. An exactly-full final page costs one
+		// more request that comes back empty, which is cheaper than reading
+		// `x-next-page` back out of the response headers whose casing varies.
+		if (result.value.length < MERGE_REQUESTS_PER_PAGE) {
+			return { ok: true, value: { entries, truncated: false } };
+		}
+	}
+
+	// The cap was reached with a full page still coming back, so there may be
+	// more. A corpus that is an exact multiple of the cap is reported as
+	// truncated when it is in fact complete — the error is one-directional and
+	// in the safe direction: "could not complete" over a confident wrong answer.
+	console.error(
+		`Docs Publisher: merge-request listing hit its ${MERGE_REQUEST_PAGE_CAP}-page cap ` +
+			`(${entries.length} entries); the result is incomplete and must not be resolved from.`
+	);
+	return { ok: true, value: { entries, truncated: true } };
+}
+
+/** Every field reconciliation needs must be present; the rest degrade. */
+function toMergeRequestSummary(raw: unknown): MergeRequestSummary | null {
+	if (typeof raw !== 'object' || raw === null) {
+		return null;
+	}
+
+	const source = raw as Record<string, unknown>;
+	const iid = source['iid'];
+	const state = source['state'];
+	const sourceBranch = source['source_branch'];
+	if (typeof iid !== 'number' || typeof state !== 'string' || typeof sourceBranch !== 'string') {
+		return null;
+	}
+
+	const webUrl = source['web_url'];
+	const userNotesCount = source['user_notes_count'];
+	return {
+		iid,
+		state,
+		sourceBranch,
+		webUrl: typeof webUrl === 'string' && webUrl !== '' ? webUrl : null,
+		userNotesCount: typeof userNotesCount === 'number' ? userNotesCount : null,
+	};
+}
+
+/**
+ * Reads whether a merge request carries review threads that are not yet
+ * resolved. Reports that fact and nothing else — what an unresolved thread
+ * MEANS for a document is submission-tracking's to decide.
+ *
+ * Takes the listing entry rather than a bare `iid` because
+ * `userNotesCount` is the gate: a merge request nobody has commented on
+ * cannot hold an unresolved thread, so it answers `false` without a request.
+ * That gate is what keeps this bounded by review activity rather than by
+ * corpus size. A null count means the response did not report one, which is
+ * read as UNKNOWN and makes the request — never as zero.
+ *
+ * A failure comes back as `ok: false` and never as `false`. Answering "no
+ * unresolved threads" for a check that did not happen would quietly move a
+ * document out of changes-requested, which is the one state this call exists
+ * to find.
+ *
+ * MECHANISM: this is design.md decision 4's fallback, and it ships in place
+ * of the preferred `blocking_discussions_resolved` listing field because it
+ * is correct whether or not that field exists and whether or not the
+ * project's "all threads must be resolved before merging" setting is on. The
+ * spike that would have settled the preferred form was not run; see design.md
+ * decision 4. This is the only place that asks the question, so switching
+ * later is one call site.
+ *
+ * PERMISSION: expected to be `Merge Request: Read`, NOT observed — see
+ * `docs/access-tokens.md` §1 for the distinction and
+ * `docs/ce-verification.md` §A4 for how to settle it.
+ */
+async function hasUnresolvedThreads(
+	details: ConnectionDetails,
+	mergeRequest: { iid: number; userNotesCount: number | null }
+): Promise<ClientResult<boolean>> {
+	if (mergeRequest.userNotesCount === 0) {
+		return { ok: true, value: false };
+	}
+
+	for (let page = 1; page <= DISCUSSIONS_PAGE_CAP; page++) {
+		const result = await getRaw(
+			details,
+			`/projects/${encodeProject(details.projectId)}/merge_requests/${mergeRequest.iid}` +
+				`/discussions?per_page=${MERGE_REQUESTS_PER_PAGE}&page=${page}`,
+			classifyScopedStatus
+		);
+		if (!result.ok) {
+			return failureFrom(result);
+		}
+
+		if (!Array.isArray(result.value)) {
+			return { ok: false, failure: 'unexpected' };
+		}
+
+		if (result.value.some(hasUnresolvedNote)) {
+			return { ok: true, value: true };
+		}
+
+		if (result.value.length < MERGE_REQUESTS_PER_PAGE) {
+			return { ok: true, value: false };
+		}
+	}
+
+	// A thousand discussions on one document with none of them unresolved.
+	// Logged rather than failed: the answer below is what the caller would
+	// have got anyway, and failing the whole refresh over a bound nothing
+	// realistic reaches would be the worse trade.
+	console.error(
+		`Docs Publisher: discussions for merge request ${mergeRequest.iid} hit their ` +
+			`${DISCUSSIONS_PAGE_CAP}-page cap with no unresolved thread found.`
+	);
+	return { ok: true, value: false };
+}
+
+/**
+ * A thread is unresolved when any note in it is resolvable and not resolved.
+ * Notes that are not resolvable — system notes, plain comments — cannot hold
+ * a thread open and are ignored.
+ */
+function hasUnresolvedNote(discussion: unknown): boolean {
+	if (typeof discussion !== 'object' || discussion === null) {
+		return false;
+	}
+
+	const notes = (discussion as { notes?: unknown }).notes;
+	if (!Array.isArray(notes)) {
+		return false;
+	}
+
+	return notes.some((note) => {
+		if (typeof note !== 'object' || note === null) {
+			return false;
+		}
+		const source = note as Record<string, unknown>;
+		return source['resolvable'] === true && source['resolved'] !== true;
+	});
 }
 
 /**
@@ -273,37 +573,74 @@ async function branchExists(
  * entitled to do so precisely when nothing is under review. A failed lookup
  * returns `ok: false` and is therefore distinguishable from "none exists",
  * so a caller can abort instead of proceeding.
+ *
+ * Goes through `listMergeRequests` rather than building its own query, so
+ * this capability has one merge-request endpoint, one query construction and
+ * one classification path (this change's tasks.md 2.4). The narrowing stays
+ * SERVER-side — the same `source_branch` and `state` filters it always sent —
+ * rather than listing the project and filtering in memory: this runs in the
+ * submit pre-flight, where a full listing would be both slower and able to
+ * truncate, and where `null` is what licenses deleting a branch.
  */
 async function findOpenMergeRequest(
 	details: ConnectionDetails,
 	sourceBranch: string
 ): Promise<ClientResult<OpenMergeRequest | null>> {
-	const query = `source_branch=${encodeURIComponent(sourceBranch)}&state=opened`;
+	const result = await listMergeRequests(details, { sourceBranch, state: 'opened' });
+	if (!result.ok) {
+		return result;
+	}
+
+	const first = result.value.entries[0];
+	if (first !== undefined) {
+		return { ok: true, value: { iid: first.iid } };
+	}
+
+	// Not reachable with a single source branch filtered server-side, and
+	// guarded anyway: "nothing matched" out of an incomplete listing is the
+	// one answer here that authorizes a destructive act.
+	if (result.value.truncated) {
+		return { ok: false, failure: 'unexpected' };
+	}
+
+	return { ok: true, value: null };
+}
+
+/**
+ * Reads the single file path a merge request's own commit changed, when it
+ * changed exactly one. Reports "could not be determined" as `ok: true,
+ * value: null` for zero or more than one changed path — a successful answer
+ * distinct from a failed lookup — rather than guessing among several. Used
+ * only as recovery's fallback for a record with no stored path (this
+ * change's (add-document-recovery) design.md decision 1): guessing wrong
+ * here would recreate a note under a path that is not actually its remote
+ * identity.
+ *
+ * Classified through `classifyScopedStatus`, like the other merge-request
+ * reads. Permission name NOT YET OBSERVED.
+ */
+async function getMergeRequestChangedPath(
+	details: ConnectionDetails,
+	iid: number
+): Promise<ClientResult<string | null>> {
 	const result = await getRaw(
 		details,
-		`/projects/${encodeProject(details.projectId)}/merge_requests?${query}`,
+		`/projects/${encodeProject(details.projectId)}/merge_requests/${iid}/changes`,
 		classifyScopedStatus
 	);
 	if (!result.ok) {
-		return result.detail === undefined
-			? { ok: false, failure: result.failure }
-			: { ok: false, failure: result.failure, detail: result.detail };
+		return failureFrom(result);
 	}
 
-	if (!Array.isArray(result.value)) {
-		return { ok: false, failure: 'unexpected' };
-	}
-
-	if (result.value.length === 0) {
+	const changes = (result.value as { changes?: unknown }).changes;
+	if (!Array.isArray(changes) || changes.length !== 1) {
 		return { ok: true, value: null };
 	}
 
-	const iid = (result.value[0] as Partial<{ iid: number }>).iid;
-	if (typeof iid !== 'number') {
-		return { ok: false, failure: 'unexpected' };
-	}
-
-	return { ok: true, value: { iid } };
+	const entry = changes[0];
+	const path =
+		typeof entry === 'object' && entry !== null ? (entry as { new_path?: unknown }).new_path : undefined;
+	return { ok: true, value: typeof path === 'string' && path !== '' ? path : null };
 }
 
 /**
@@ -329,6 +666,10 @@ async function deleteBranch(details: ConnectionDetails, branch: string): Promise
  * handed one — a plain read, classified through the existing read path
  * rather than the write one, since a fine-grained token's write scope has
  * nothing to do with whether the project itself can be read.
+ *
+ * Exported as of add-document-recovery: the submit collision pre-flight and
+ * recovery's branch-then-default content fallback both need the same
+ * answer, and duplicating this call would risk the two drifting.
  */
 async function getDefaultBranch(details: ConnectionDetails): Promise<ClientResult<string>> {
 	const result = await get(details, `/projects/${encodeProject(details.projectId)}`);
@@ -354,6 +695,19 @@ async function getDefaultBranch(details: ConnectionDetails): Promise<ClientResul
 type RawReadResult =
 	| { ok: true; value: unknown }
 	| { ok: false; failure: FailureKind; status: number | null; detail?: string };
+
+/**
+ * Narrows a failed raw read to a `ClientResult` failure, dropping the status
+ * and preserving `detail` only when there is one. Spelled out once because
+ * `detail` is optional rather than nullable: assigning `detail: undefined`
+ * unconditionally would put the key on the object, so a caller testing for
+ * its presence would find one that is not there.
+ */
+function failureFrom<T>(result: { failure: FailureKind; detail?: string }): ClientResult<T> {
+	return result.detail === undefined
+		? { ok: false, failure: result.failure }
+		: { ok: false, failure: result.failure, detail: result.detail };
+}
 
 /**
  * `classify` defaults to `classifyStatus`, which is right for the connection
@@ -403,13 +757,52 @@ async function getRaw(
 /** `getRaw` with the status dropped — what every caller but one wants. */
 async function get(details: ConnectionDetails, path: string): Promise<ClientResult<unknown>> {
 	const result = await getRaw(details, path);
-	if (result.ok) {
-		return result;
+	return result.ok ? result : failureFrom(result);
+}
+
+/**
+ * `getRaw`'s counterpart for an endpoint whose successful body is the raw
+ * file itself rather than JSON — used only by `getFileContent`. Structured
+ * identically to `getRaw`, including returning the raw status so a caller
+ * can distinguish absence from failure the same way `branchExists` does;
+ * the one difference is the success path, which returns the response text
+ * verbatim instead of attempting `response.json` (which would throw on a
+ * plain-text body and misreport every successful read as `unexpected`).
+ */
+async function getRawText(
+	details: ConnectionDetails,
+	path: string,
+	classify: (status: number) => FailureKind
+): Promise<
+	{ ok: true; value: string } | { ok: false; failure: FailureKind; status: number | null; detail?: string }
+> {
+	const url = `${normalizeHost(details.host)}/api/v4${path}`;
+
+	let response: RequestUrlResponse;
+	try {
+		response = await requestUrl({
+			url,
+			method: 'GET',
+			headers: { 'PRIVATE-TOKEN': details.token.trim() },
+			throw: false,
+		});
+	} catch (error) {
+		const status = statusFromError(error);
+		const failure = status === null ? 'server-unreachable' : classify(status);
+		logFailure('GET', url, status, failure, error);
+		return { ok: false, failure, status };
 	}
 
-	return result.detail === undefined
-		? { ok: false, failure: result.failure }
-		: { ok: false, failure: result.failure, detail: result.detail };
+	if (response.status < 200 || response.status >= 300) {
+		const failure = classify(response.status);
+		const detail = failure === 'insufficient-permission' ? extractPermissionDetail(response) : undefined;
+		logFailure('GET', url, response.status, failure, bodyPreview(response));
+		return detail === undefined
+			? { ok: false, failure, status: response.status }
+			: { ok: false, failure, status: response.status, detail };
+	}
+
+	return { ok: true, value: response.text };
 }
 
 /**
@@ -566,8 +959,8 @@ function classifyScopedStatus(status: number): FailureKind {
  * either way.
  *
  * Observed on gitlab.com only. NOT yet confirmed against the self-managed
- * CE 19.3.0 target instance — the same deferred rerun as
- * `docs/access-tokens.md` §1(a).
+ * CE 19.3.0 target instance — tracked as `docs/ce-verification.md` §B2,
+ * which also records what degrades if the shape differs.
  */
 function extractPermissionDetail(response: RequestUrlResponse): string | undefined {
 	let body: unknown;
@@ -640,6 +1033,11 @@ export {
 	createBranchWithCommit,
 	createMergeRequest,
 	branchExists,
+	listMergeRequests,
+	hasUnresolvedThreads,
 	findOpenMergeRequest,
 	deleteBranch,
+	getDefaultBranch,
+	getFileContent,
+	getMergeRequestChangedPath,
 };

@@ -27,6 +27,19 @@ export function resolveSubmissionRecord(
 }
 
 /**
+ * `doc/<docId>` — the one place a document's branch name is derived.
+ *
+ * Exported because two callers need the same string for opposite reasons:
+ * submit WRITES it, and reconciliation MATCHES against it. Deriving it twice
+ * would let the two spellings drift, and the failure would be silent — every
+ * document resolving as never submitted while its merge requests sit there
+ * under the other spelling. See `docs/document-identity.md` §2.
+ */
+export function branchForDocId(docId: string): string {
+	return `doc/${docId}`;
+}
+
+/**
  * The one way the plugin reads a note's frozen `doc_id`. Exported because
  * submit needs the same question answered before it derives one from the
  * filename (`docs/document-identity.md` §3: the frozen value is the identity

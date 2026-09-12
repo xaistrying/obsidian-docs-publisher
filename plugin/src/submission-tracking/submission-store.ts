@@ -31,8 +31,38 @@ class SubmissionStore {
 		return this.data.submissions[docId];
 	}
 
+	/**
+	 * Every persisted record, in no particular order. Added for
+	 * add-document-recovery, whose orphaned-record list is this set minus
+	 * whichever `doc_id`s the vault currently has notes for — a complement
+	 * `get` alone cannot compute.
+	 */
+	allRecords(): SubmissionRecord[] {
+		// `Object.values` needs a lib target this project's tsconfig does not
+		// set (ES5/ES6/ES7 only) — `Object.keys` plus a map is available under
+		// all three and says the same thing.
+		return Object.keys(this.data.submissions).map((docId) => this.data.submissions[docId]);
+	}
+
 	async save(record: SubmissionRecord): Promise<void> {
-		this.data.submissions[record.docId] = record;
+		await this.saveMany([record]);
+	}
+
+	/**
+	 * Writes several records under ONE `saveData` call. Reconciliation
+	 * corrects every document it resolved in a single pass, and saving each
+	 * separately would write `data.json` once per document — the same file,
+	 * rewritten whole, N times per refresh, with every intermediate write a
+	 * point at which a crash leaves the store half-corrected.
+	 */
+	async saveMany(records: readonly SubmissionRecord[]): Promise<void> {
+		if (records.length === 0) {
+			return;
+		}
+
+		for (const record of records) {
+			this.data.submissions[record.docId] = record;
+		}
 		await this.plugin.saveData(this.data);
 	}
 }

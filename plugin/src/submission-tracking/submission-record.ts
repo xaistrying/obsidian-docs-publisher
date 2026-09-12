@@ -12,6 +12,16 @@ export interface SubmissionRecord {
 	branch: string;
 	mrIid: number;
 	state: SubmissionState;
+	/**
+	 * The document's remote path, captured at the moment of a successful
+	 * submit — added by add-document-recovery, going forward only. Undefined
+	 * for every record persisted before this field existed, which is every
+	 * record that exists as of that change shipping. Recovery falls back to
+	 * reading the path off the record's still-open merge request for those
+	 * (`recover.ts`) rather than treating the absence as an error. See that
+	 * change's design.md decision 1.
+	 */
+	path?: string;
 }
 
 /**
@@ -25,13 +35,32 @@ export type SubmissionState = 'pending' | 'changes-requested' | 'published' | 'c
 
 /**
  * Author-facing label for each state, never the internal name and never a
- * git-vocabulary term. Only `pending` is reachable through this milestone;
- * the rest are provisional placeholders reserved for milestone 5+ to revise
- * once those transitions are actually built.
+ * git-vocabulary term. Every one of these is now reachable: reconciliation
+ * resolves all four from the remote, so none is a placeholder any more.
+ *
+ * `closed` reads "Not accepted" and not "Closed". The old label was recorded
+ * as provisional while the state was unreachable; it is the author vocabulary
+ * `openspec/config.yaml` settled on, and "Closed" both leaks the platform's
+ * own word and tells an author nothing about what happened to their document.
  */
 export const SUBMISSION_STATE_LABELS: Record<SubmissionState, string> = {
 	pending: 'Waiting for review',
 	'changes-requested': 'Changes requested',
 	published: 'Published',
-	closed: 'Closed',
+	closed: 'Not accepted',
 };
+
+/**
+ * The label for a document the remote holds nothing for.
+ *
+ * Deliberately NOT a member of `SubmissionState` or of the table above:
+ * `unsubmitted` is the absence of a record rather than a stored state, and
+ * giving it a key would invite something to persist it.
+ *
+ * "Not submitted yet" and never "Draft" — decided 2026-09-11, resolving a
+ * contradiction between `openspec/config.yaml` lines 340 and 699. The same
+ * file rejects `draft` as a STATE name precisely because it collides with
+ * GitLab's own Draft merge requests, and using it as the label the author
+ * reads would reintroduce that ambiguity at the one surface that matters.
+ */
+export const UNSUBMITTED_LABEL = 'Not submitted yet';

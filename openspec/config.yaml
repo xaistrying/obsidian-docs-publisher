@@ -46,6 +46,13 @@ context: |
     is held in memory versus written to disk, the open `secretStorage` spike,
     and what "Test connection" does and does not prove. Required reading
     before touching credential handling or authentication.
+  - `docs/ce-verification.md` — every remote behaviour established on
+    gitlab.com but NOT yet confirmed on the self-managed CE 19.3.0 target,
+    as a runnable checklist: permission names, response shapes the client
+    parses, the `blocking_discussions_resolved` question, and the
+    end-to-end checks. Each item says what breaks if the assumption is
+    wrong. Read it before treating any platform behaviour as established,
+    and record results there rather than in a change's tasks.
   When a decision in this file turns on a fact recorded in `docs/`, cite
   the doc rather than restating the fact — one copy, so the two cannot
   drift apart. Add a new doc when a subject needs more than a paragraph
@@ -179,12 +186,41 @@ context: |
          reorganization already uses.
      Attachment paths follow the same 1:1 vault mirroring as documents
      and are pushed from their location at submit time.
-  5. See your status — sidebar lists the author's own docs with their
-     current state, resolved via reconciliation. Read-only from the
-     author's point of view, but this is where the READ path is built:
-     milestone 4 only writes, so this milestone makes the first
-     `GET /merge_requests` call and needs a new client method for it.
-     Do not scope it as though the remote surface already exists.
+  5. See your status — DONE (2026-09-11, add-document-status). Sidebar
+     lists the author's own docs with their current state, resolved via
+     reconciliation from front-matter `doc_id` alone. Read-only from the
+     author's point of view. The remote decides; plugin data is the cache,
+     overwritten on every successful refresh.
+     CORRECTED 2026-09-11: this entry used to say milestone 4 only writes,
+     so this one "makes the first `GET /merge_requests` call and needs a
+     new client method for it." fix-interrupted-submit made that call
+     first, on 2026-09-09, and proved reads are scope-gated too. Milestone
+     5 GENERALIZED that endpoint and inherited its classification.
+     STILL OWED, non-blocking: the CE 19.3.0 spike on
+     `blocking_discussions_resolved` was not run. "Changes requested"
+     ships on the per-merge-request discussions read instead, which is
+     correct whether or not that field exists and whether or not the
+     project's "all threads must be resolved before merging" setting is on
+     — so that setting is NOT a prerequisite here.
+  5a. Recover a document — ADDED 2026-09-11 (add-document-recovery),
+     numbered `5a` on the same convention as `4a`/`7a`: this list's
+     numbering is dependency order, and this milestone extends milestone 5
+     rather than sitting between two others, so nothing after it renumbers.
+     Two gaps milestone 5 left, both surfacing only from actually using the
+     plugin against a shared, multi-contributor project: a local note can be
+     deleted while its submission is still real, with nothing to reconnect
+     it to (`doc_id` lives only in the note's own front matter); and a
+     first-time submit whose target path already holds a document published
+     by someone else fails with the same generic message every other
+     undifferentiated failure does, no hint that a document already exists.
+     Adds a second panel list, "Documents you can recover", built from
+     `SubmissionStore`'s own records minus the vault's — and a pre-flight on
+     a first submit (no `doc_id` yet) that checks the target path against
+     the project's default branch before writing anything. Depends on
+     milestone 4 for the write path and milestone 5 for the reconciliation
+     plumbing it borrows (`findOpenMergeRequest`). Deliberately excludes
+     discovering a document this vault has never had any trace of at all —
+     see `openspec/changes/add-document-recovery/future-work.md`.
   6. Send updates — resubmit after "Changes requested": edit, click Send
      updates, it commits to the existing branch/MR and flips back to
      pending. NOT blocked: this path has an open merge request and a live
@@ -696,8 +732,14 @@ context: |
     revision of a published document submits carrying `active` while its
     merge request is still open. It also carries no information: "not
     merged yet" is already `unsubmitted`, tracked in plugin data.
-    "Draft" survives as an author-facing DISPLAY label for the
-    `unsubmitted` submission state. It is never written to YAML.
+    "Draft" does not survive as a display label either. This sentence
+    used to say it did, for the `unsubmitted` state, which contradicted
+    the states decision above giving that state the label "Not submitted
+    yet". RESOLVED 2026-09-11 in favour of "Not submitted yet", raised by
+    add-document-status: this decision rejects `draft` as a STATE name
+    precisely because GitLab's Draft merge requests mean something else,
+    and using it as the label the author READS reintroduces exactly that
+    ambiguity. The word is now unused on both axes.
   - Project and plugin identity: the repository, the npm package, and the
     manifest `id` are all `obsidian-docs-publisher`. The display name is
     "Docs Publisher". Chosen to be platform-agnostic — not `gitlab-*`,

@@ -30,6 +30,12 @@ so the facts are looked up once, not re-derived or guessed per session.
   held in memory versus written to disk, the open `secretStorage` spike, and
   what "Test connection" does and does not prove. Read before touching
   credential handling or authentication.
+- `docs/ce-verification.md` — what has NOT been confirmed on the target
+  CE 19.3.0 instance, as a runnable checklist: permission names, response
+  shapes the client parses, the `blocking_discussions_resolved` question, and
+  the end-to-end checks. Each item says what breaks if the assumption is
+  wrong. Read before treating a platform behaviour as established; record
+  results there, not in a change's tasks.
 
 `openspec/config.yaml` lists these under REFERENCE DOCS and is the authority on
 project decisions; `docs/` carries the supporting detail. If a fact appears in
