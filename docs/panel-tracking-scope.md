@@ -8,39 +8,62 @@ two threads it names but does not resolve.
 
 ## Milestone 5b — Reset, and repurposing "Your documents"
 
+SHIPPED 2026-09-13 (`add-reset-and-panel-scope`). This section described the
+design questions before the milestone was built; it now describes what is
+actually in the plugin, with the reasoning kept wherever it is what stops a
+decision being quietly reversed.
+
 ### Reset is Recover's mirror, not a new read
 
 `recoverDocument`/`fetchRecoveryContent` (`plugin/src/submission-tracking/recover.ts`)
-already do the read this needs: three-way content at path+ref
-(found/absent/failed), exactly `add-document-recovery` design.md decision 2's
-shape. The only thing distinguishing Recover from Reset is the overwrite
-policy, and it is deliberately opposite:
+already read content three-way at path+ref (found/absent/failed), exactly
+`add-document-recovery` design.md decision 2's shape. What distinguishes
+Recover from Reset is the overwrite policy, and it is deliberately opposite:
 
 - **Recover** refuses outright when a local file already occupies the
   target path (design.md decision 3) — existence there means something
   else already claims that identity, and recovery must never guess which.
 - **Reset** is for exactly the case Recover refuses: the local file IS the
   tracked document, and the point is to discard its local edits and pull
-  the remote MR's content back down. Overwrite is not a risk to avoid here,
+  the remote content back down. Overwrite is not a risk to avoid here,
   it is the requested action.
 
-So this is the same `fetchRecoveryContent` read, reused with the inverse
-write policy — not a new remote capability. What's new is the write path
-(a local overwrite, guarded on "does a note actually exist at this path
-locally," the opposite guard from `recoverDocument`'s) and the ref to read
-from: Reset should almost certainly read from the record's own tracked
-`branch`, not fall back to the default branch the way recovery's
-`fetchRecoveryContent` does for the published-orphan case — a **published**
-document has nothing left to "reset" to that differs from its own local
-content in the ordinary case, and if it does differ, that is milestone
-7's resubmit territory, not this one's.
+AS BUILT, the read is a SEPARATE function rather than
+`fetchRecoveryContent` reused — `fetchResetContent`
+(`plugin/src/submission-tracking/reset.ts`), which asks the document's own
+tracked branch and stops there. The earlier expectation recorded here, that
+this would be the same read with the inverse write policy, was revised
+during design for one reason: `fetchRecoveryContent` falls back to the
+default branch when the record's branch answers absent, which is right for
+recovering a published orphan and wrong here. A resettable document has a
+live branch by definition, so an absent answer means the panel's state is
+STALE — the review ended since the last refresh — not that the content
+lives elsewhere. Falling back would write content from a different cycle
+over local work the author never offered up. Reset refuses and says so
+instead. A shared read with a flag was rejected for the same reason: the
+flag would be one edit away from being passed wrong.
 
-**SETTLED 2026-09-12:** Reset applies only to active-MR states (pending,
-changes-requested), as originally scoped — not published. A published
-document has no live branch to reset against without milestone 7's
-fresh-cut path existing first; reading the default branch's current
-content instead would be a different, confusingly-same-named operation.
-Revising a published document is milestone 7's job, under its own name.
+The remote path is read from the document's merge request rather than taken
+from the note's own vault path, per `docs/document-identity.md` §4 — a note
+moved locally since submit would otherwise read as absent rather than as
+the moved note it is.
+
+The write is `resetDocument` (`plugin/src/doc-authoring/reset-document.ts`),
+alongside `recover-document.ts`, guarded on a note actually existing at that
+path — the opposite of `recoverDocument`'s guard. It writes the remote's
+content verbatim, front matter included, so the note lands byte-identical to
+what reviewers are reading. It writes no tracking record, changes no state,
+and re-asserts no front matter field: resetting local content changes
+nothing about the review.
+
+**SETTLED 2026-09-12, shipped as settled:** Reset applies only to active-MR
+states (pending, changes-requested) — not published. A published document
+has no live branch to reset against without milestone 7's fresh-cut path
+existing first; reading the default branch's current content instead would
+be a different, confusingly-same-named operation. Revising a published
+document is milestone 7's job, under its own name. A document whose state
+has NOT been resolved is not resettable either — offering a destructive
+action off an unknown state would act on an assumption nothing established.
 
 **Also settled, amending `openspec/config.yaml`'s NO CI PIPELINE decision:**
 that decision's "a pull mechanism must refuse while a document is awaiting
@@ -54,25 +77,53 @@ for the reasoning. Do not build a "reset without asking" variant later
 under an efficiency argument; that would be exactly the case the original
 rule was written to prevent.
 
-### Repurposing "Your documents" to Pending-only
+HOW THAT CONDITION IS HELD IN THE CODE, since "remember to confirm" is not
+a durable guarantee: the confirmation modal is private to
+`reset-document.ts` and runs INSIDE `resetDocument` itself, which is the
+only exported function in the plugin that replaces an existing note's
+content. There is no parameter that skips it and no setting that disables
+it, so the property survives callers who have never read this file. The
+prompt is also unconditional — not suppressed when nothing would be lost —
+because Obsidian exposes no signal for that, and diffing local against
+remote first would make the prompt conditional, which is one refactor from
+the silent path the amendment forbids.
 
-Today `renderDocumentList` (`plugin/src/main.ts:433-467`) lists every
-vault note carrying a `doc_id`, in every state. Narrowing it to
-active-MR states only (pending, changes-requested) is a filter on data
-this code already has — `listVaultDocuments` plus `this.statuses.statusFor`
-— not a new read. The real design work is what happens to the states this
-removes from view:
+Reset is offered only for the CURRENTLY OPEN note, in `renderSubmitSection`
+beside the resubmit action, and never as a per-row control. That is a
+safety property rather than a layout choice: requiring the note to be open
+means the author is looking at what they are about to discard, so the
+confirmation is the second thing guarding a misclick rather than the only
+one. There is deliberately no command-palette entry either.
 
-- **published**, still present locally: needs *some* surface, since the
-  author still opens and edits it. If "Your documents" drops it entirely,
-  where does its Reset/Revise action live?
-- **closed** ("Not accepted"), still present locally: same question —
-  7a's resubmit action needs a row somewhere.
+### Repurposing "Your documents" to active-MR states
 
-**This doc does not resolve that** — it is a genuine fork, not an
-oversight, and should be decided alongside milestone 7/7a's panel wiring
-(`docs/resubmission-lifecycle.md` §4), not independently, since both land
-in `renderDocumentRow`.
+Shipped as scoped. `renderDocumentList` partitions `listVaultDocuments`
+against `this.statuses.statusFor` — no new read, no remote call:
+
+```
+Your documents    → never submitted, unresolved, pending, changes-requested
+Other documents   → published, not accepted
+```
+
+An UNRESOLVED document stays in "Your documents". Moving it would assert
+its cycle is over, which is the silent wrongness `add-document-status`
+exists to prevent — the same reason its row shows no state label.
+
+"Other documents" is absent entirely when empty, the way "Documents you can
+recover" already is, rather than shown with a competing empty state. The
+primary section has its own second empty state for the vault whose every
+document has finished ("Nothing is waiting for review right now"), since
+"Nothing submitted yet" would be false there.
+
+The heading shipped as "Other documents" — the working name, kept, with a
+line under it naming what it holds ("Published documents, and documents
+that weren't accepted."). The heading stays true as states are added; the
+description is what keeps it from reading as a leftovers bin.
+
+What the second section buys is VISIBILITY, not rescued actions. The
+resubmit actions for published and not-accepted documents render in the
+submit section for whichever note is open — see the corrected premise at
+the end of this doc — and no row in either list carries an action.
 
 ### The recovery-scope question `future-work.md` already raised
 
@@ -80,27 +131,28 @@ in `renderDocumentRow`.
 'recover' should visually live in the same list once both exist... recovery
 is 'yours, just misplaced'; discovery is 'not yours, but available.'"*
 
-Narrowing "Documents you can recover" to active-MR orphans only (matching
-this milestone's framing of the panel as pending-focused) raises exactly
-that question in a sharper form: a **published**-but-locally-deleted
+Narrowing "Documents you can recover" to active-MR orphans only would raise
+exactly that question in a sharper form: a **published**-but-locally-deleted
 record is currently in that list (it resolves as recoverable via the
 stored `path` or the merge-request fallback, `recover.ts:88-114`,
-regardless of state). If it's removed from "Documents you can recover"
-because that list now means "active MR only," does it:
+regardless of state). If it were removed because that list now means
+"active MR only," does it:
 
 1. **Stay findable through Discover instead** (§ below) once that ships —
    meaning Discover needs to know about `SubmissionStore`'s own records,
    not just diff the vault against the repository tree; or
 2. **Disappear from both surfaces** until Discover ships, a real gap for
-   anyone who deletes a published note's local copy in the gap between
-   this milestone and milestone 9.
+   anyone who deletes a published note's local copy in the meantime.
 
-Leaning toward (1) once milestone 9 exists, since a published, tracked,
-locally-missing document and a genuinely-unknown remote document differ
-only in whether the plugin already holds a stored record for it — and
-`resolveOrphanedRecords`'s existing logic already knows how to answer that
-distinction. Not decided here; flagged for whoever designs 5b and 9
-together.
+DECIDED FOR 5b, 2026-09-13: "Documents you can recover" was NOT narrowed.
+It still lists orphaned records in every state, exactly as it did. Option 2
+is a live gap with no ship date attached to its fix, and 5b had no reason
+to open it. The question itself stays open and still leans toward (1) once
+milestone 9 exists, since a published, tracked, locally-missing document
+and a genuinely-unknown remote document differ only in whether the plugin
+already holds a stored record for it — and `resolveOrphanedRecords`'s
+existing logic already knows how to answer that distinction. Flagged for
+whoever designs 9.
 
 ## Milestone 9 — Discover & Import
 
@@ -185,6 +237,25 @@ same vertical space as milestone 5b's narrowed, pending-focused list is
 worth deciding together rather than bolting on separately.
 
 ## RESOLVED 2026-09-12 — the panel-scope conflict between ideas 2 and 3
+
+CORRECTED 2026-09-13, after 6/7/7a actually shipped: the premise below
+overstated the conflict. It assumed 6/7/7a's actions render as per-row
+buttons in "Your documents," so narrowing the list would strand them. They
+do not. `renderSubmitSection` renders the resubmit action for the
+CURRENTLY OPEN note, keyed off `getActiveFile()`; `renderDocumentRow` has
+no action button at all — name, state label, and an "Open in GitLab" link
+only. Narrowing the list therefore strands nothing: a published or closed
+document's action works the moment its note is open, whatever the list
+shows.
+
+What narrowing actually costs is VISIBILITY — the author can no longer see
+that a published or closed document exists, or what state it is in,
+without opening it. That is a real loss and still justifies a second
+section, but it is a weaker and different reason than "the actions lose
+their row," and 5b should be scoped against the real one. The decision
+below stands; its rationale is amended to this.
+
+SHIPPED 2026-09-13 as decided below.
 
 5b narrows "Your documents" to active-MR states (pending,
 changes-requested) only. Milestones 6/7/7a need an author-facing action

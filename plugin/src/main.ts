@@ -23,13 +23,21 @@ import {
 } from './submission-tracking/document-status';
 import { requireAuthoringGate } from './doc-authoring/authoring-gate';
 import { RECOVER_LABEL, recoverDocument as recoverDocumentWrite } from './doc-authoring/recover-document';
+import {
+	RESET_LABEL,
+	RESET_READ_FAILED_MESSAGE,
+	RESET_UNAVAILABLE_MESSAGE,
+	resetDocument as resetDocumentWrite,
+} from './doc-authoring/reset-document';
 import type { OrphanedDocument } from './submission-tracking/recover';
 import {
 	RecoveryHolder,
 	fetchRecoveryContent,
 	refreshRecoverableDocuments as refreshRemoteRecoverableDocuments,
 } from './submission-tracking/recover';
-import { resolveSubmissionRecord } from './submission-tracking/resolve';
+import type { ResettableDocument } from './submission-tracking/reset';
+import { fetchResetContent, resettableDocument } from './submission-tracking/reset';
+import { readDocId, resolveSubmissionRecord } from './submission-tracking/resolve';
 import type { SubmissionRecord, SubmissionState } from './submission-tracking/submission-record';
 import { SUBMISSION_STATE_LABELS, UNSUBMITTED_LABEL } from './submission-tracking/submission-record';
 import { SubmissionStore } from './submission-tracking/submission-store';
@@ -60,6 +68,28 @@ const RESUBMIT_LABELS: Record<SubmissionState, string> = {
 const REFRESH_LABEL = 'Refresh';
 const DOCUMENTS_HEADING = 'Your documents';
 const NO_DOCUMENTS_MESSAGE = 'Nothing submitted yet. Documents you submit will be listed here.';
+
+/**
+ * The primary list's OTHER empty state, for a vault whose every document
+ * has finished its review. The message above would be a lie there —
+ * something has been submitted, it just isn't waiting on anyone — and the
+ * documents it is talking about are visible in the second section below.
+ */
+const NO_OPEN_DOCUMENTS_MESSAGE = 'Nothing is waiting for review right now.';
+
+/**
+ * The second section, for documents whose review cycle is over.
+ *
+ * "Other documents" was carried over from design.md as a working name, with
+ * the objection recorded that it reads as a leftovers bin. Kept as shipped
+ * copy anyway, and the description below is what answers the objection: the
+ * heading stays true as states are added (a heading naming today's two
+ * would be wrong the moment a third lands here), and the line under it says
+ * plainly which documents those are, so nothing is a mystery bin.
+ */
+const OTHER_DOCUMENTS_HEADING = 'Other documents';
+const OTHER_DOCUMENTS_DESCRIPTION = "Published documents, and documents that weren't accepted.";
+
 const OPEN_ON_PLATFORM_LABEL = 'Open in GitLab';
 
 /**
@@ -86,6 +116,14 @@ function recoveryPermissionMessage(detail: string | undefined): string {
 	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
 	return (
 		`Your access token doesn't have permission to check which documents can be recovered${missing}. ` +
+		'Ask your admin to add it.'
+	);
+}
+
+function resetPermissionMessage(detail: string | undefined): string {
+	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
+	return (
+		`Your access token doesn't have permission to read the version under review${missing}. ` +
 		'Ask your admin to add it.'
 	);
 }
@@ -167,6 +205,7 @@ class DocsPublisherView extends ItemView {
 	private readonly refreshStatuses: () => void;
 	private readonly recoverable: RecoveryHolder;
 	private readonly recoverDocument: (entry: Extract<OrphanedDocument, { recoverable: true }>) => void;
+	private readonly resetDocument: (file: TFile, target: ResettableDocument) => void;
 	// The pending `setTimeout` id for a scheduled-but-not-yet-run render, or
 	// null when none is pending. See `scheduleRender`.
 	private renderTimer: number | null = null;
@@ -182,7 +221,8 @@ class DocsPublisherView extends ItemView {
 		statuses: DocumentStatusHolder,
 		refreshStatuses: () => void,
 		recoverable: RecoveryHolder,
-		recoverDocument: (entry: Extract<OrphanedDocument, { recoverable: true }>) => void
+		recoverDocument: (entry: Extract<OrphanedDocument, { recoverable: true }>) => void,
+		resetDocument: (file: TFile, target: ResettableDocument) => void
 	) {
 		super(leaf);
 		this.state = state;
@@ -202,6 +242,7 @@ class DocsPublisherView extends ItemView {
 		this.refreshStatuses = refreshStatuses;
 		this.recoverable = recoverable;
 		this.recoverDocument = recoverDocument;
+		this.resetDocument = resetDocument;
 	}
 
 	getViewType(): string {
@@ -446,15 +487,55 @@ class DocsPublisherView extends ItemView {
 			.onClick(() => {
 				this.submitForReview();
 			});
+
+		this.renderResetAction(actionsContainer, file);
 	}
 
 	/**
-	 * The author's documents and where each one stands.
+	 * Reset, for the open note only and only while its review is open.
+	 *
+	 * Beside the resubmit action above rather than on every row of the list,
+	 * and that is a safety property, not a layout preference: Reset destroys
+	 * local work, and requiring the note to be open means the author is
+	 * looking at what they are about to discard. A row of Reset buttons in a
+	 * list makes a misclick cheap and the thing destroyed invisible — the
+	 * confirmation would then be the ONLY thing between a slip and lost work
+	 * rather than the second thing (design.md decision 2).
+	 *
+	 * Eligibility is read from the RESOLVED state, not from the stored
+	 * record the section above labels with. A stored state can be left over
+	 * from a previous session, and offering a destructive action off one
+	 * would act on an answer the remote was never asked for. A document
+	 * nothing has resolved yet gets no Reset at all, for the same reason its
+	 * row shows no label.
+	 */
+	private renderResetAction(container: HTMLElement, file: TFile): void {
+		const docId = readDocId(this.app, file);
+		if (docId === null) {
+			return;
+		}
+
+		const target = resettableDocument(this.statuses.statusFor(docId));
+		if (target === null) {
+			return;
+		}
+
+		new ButtonComponent(container)
+			.setButtonText(RESET_LABEL)
+			.setWarning()
+			.onClick(() => {
+				this.resetDocument(file, target);
+			});
+	}
+
+	/**
+	 * The author's documents and where each one stands, across two sections.
 	 *
 	 * Renders from the resolved states the holder already has and makes no
 	 * remote call of its own — this runs on every note switch and every front
 	 * matter edit. The only things that reach the remote are the Refresh
-	 * control below and the view opening.
+	 * control below and the view opening. The split costs no request either:
+	 * it is a partition of data this method already holds.
 	 */
 	private renderDocumentList(container: HTMLElement): void {
 		const section = container.createDiv({ cls: 'docs-publisher-documents' });
@@ -480,11 +561,85 @@ class DocsPublisherView extends ItemView {
 		}
 
 		// Built from the vault, not from stored records — design.md decision 6.
-		const documents = listVaultDocuments(this.app);
+		const { open, finished } = this.partitionDocuments(listVaultDocuments(this.app));
+
+		if (open.length === 0) {
+			section.createEl('p', {
+				text: finished.length === 0 ? NO_DOCUMENTS_MESSAGE : NO_OPEN_DOCUMENTS_MESSAGE,
+				cls: 'setting-item-description',
+			});
+		} else {
+			const list = section.createEl('ul', { cls: 'docs-publisher-document-list' });
+			for (const entry of open) {
+				this.renderDocumentRow(list, entry);
+			}
+		}
+
+		// Rendered from here rather than from `renderBody`, so the two
+		// sections cannot be wired to different sets of callers: every band
+		// that sees one sees the other, including the read-only one, where
+		// neither section is an action.
+		this.renderOtherDocuments(container, finished);
+	}
+
+	/**
+	 * Splits tracked documents into the one list an author checks for work
+	 * and the one that holds everything else.
+	 *
+	 * Only published and not-accepted move. EVERYTHING else stays in the
+	 * primary section, and the case that matters is the unresolved one: a
+	 * document nothing has resolved yet (`statusFor` returns null, the
+	 * first-refresh-failed case) stays put, because moving it would assert
+	 * that its cycle is over — a settled state nothing established, which is
+	 * precisely the silent wrongness this panel's whole status mechanism
+	 * exists to prevent (design.md decision 4).
+	 */
+	private partitionDocuments(documents: readonly VaultDocument[]): {
+		open: VaultDocument[];
+		finished: VaultDocument[];
+	} {
+		const open: VaultDocument[] = [];
+		const finished: VaultDocument[] = [];
+
+		for (const entry of documents) {
+			const state = this.statuses.statusFor(entry.docId)?.submission?.state ?? null;
+			if (state === 'published' || state === 'closed') {
+				finished.push(entry);
+			} else {
+				open.push(entry);
+			}
+		}
+
+		return { open, finished };
+	}
+
+	/**
+	 * "Other documents" — published and not-accepted documents still in the
+	 * vault, at lower prominence.
+	 *
+	 * Absent entirely when it holds nothing, the same way "Documents you can
+	 * recover" already is, rather than competing with the primary list for
+	 * attention on the common case of having nothing to say.
+	 *
+	 * Rows are the same rows: name, state label, and the "Open in GitLab"
+	 * escape hatch. This section exists to preserve VISIBILITY that
+	 * narrowing the primary list would otherwise cost — the resubmit action
+	 * for these documents renders in the submit section for whichever note
+	 * is open, and never on a row here.
+	 */
+	private renderOtherDocuments(container: HTMLElement, documents: readonly VaultDocument[]): void {
 		if (documents.length === 0) {
-			section.createEl('p', { text: NO_DOCUMENTS_MESSAGE, cls: 'setting-item-description' });
 			return;
 		}
+
+		const section = container.createDiv({
+			cls: 'docs-publisher-documents docs-publisher-documents-secondary',
+		});
+		section.createEl('h4', { text: OTHER_DOCUMENTS_HEADING });
+		section.createEl('p', {
+			text: OTHER_DOCUMENTS_DESCRIPTION,
+			cls: 'setting-item-description',
+		});
 
 		const list = section.createEl('ul', { cls: 'docs-publisher-document-list' });
 		for (const entry of documents) {
@@ -680,6 +835,9 @@ class DocsPublisherPlugin extends Plugin {
 					this.recoverableDocuments,
 					(entry) => {
 						this.recoverDocument(entry);
+					},
+					(file, target) => {
+						this.resetDocument(file, target);
 					}
 				)
 		);
@@ -830,6 +988,59 @@ class DocsPublisherPlugin extends Plugin {
 			}
 
 			this.recoverableDocuments.remove(entry.docId);
+		})();
+	}
+
+	/**
+	 * The one path to resetting a document: read what the document carries on
+	 * its own tracked branch, then hand it to the write, which confirms
+	 * before it replaces anything.
+	 *
+	 * There is no second entry point — no command palette entry, deliberately.
+	 * A hotkey-bound destructive action on whatever note happens to be open
+	 * is the misclick case the panel control is shaped to avoid, and the
+	 * confirmation would be the only thing left guarding it.
+	 *
+	 * Nothing here writes a tracking record or touches the holder's resolved
+	 * state: a reset changes what the note says, not where the review stands
+	 * (design.md decision 5), so the panel's state labels are correct
+	 * unchanged afterwards.
+	 */
+	private resetDocument(file: TFile, target: ResettableDocument): void {
+		// Gated up front purely to avoid a wasted request when the control is
+		// stale — `resetDocumentWrite` gates again regardless, which is the
+		// actual enforcement, for the same reason `recoverDocument` does.
+		if (requireAuthoringGate(this.connection, this.connectionState.current) === null) {
+			return;
+		}
+
+		void (async () => {
+			const fetched = await fetchResetContent(this.connection, target);
+			if (fetched.kind === 'failed') {
+				new Notice(
+					fetched.failure === 'insufficient-permission'
+						? resetPermissionMessage(fetched.detail)
+						: RESET_READ_FAILED_MESSAGE
+				);
+				return;
+			}
+
+			// The review ended between the last refresh and this press. Refused
+			// rather than fetched from anywhere else: the default branch holds
+			// content from a different cycle, which is not what was asked for
+			// and would be written over local work (design.md decision 1).
+			if (fetched.kind === 'absent') {
+				new Notice(RESET_UNAVAILABLE_MESSAGE);
+				return;
+			}
+
+			await resetDocumentWrite(
+				this.app,
+				this.connection,
+				this.connectionState.current,
+				file,
+				fetched.content
+			);
 		})();
 	}
 

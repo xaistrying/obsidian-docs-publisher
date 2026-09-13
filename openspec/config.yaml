@@ -231,142 +231,49 @@ context: |
      plumbing it borrows (`findOpenMergeRequest`). Deliberately excludes
      discovering a document this vault has never had any trace of at all —
      see `openspec/changes/add-document-recovery/future-work.md`.
-  5b. Reset, and repurpose "Your documents" — ADDED. Mirrors 5a's Recover,
-     overwrite inverted; narrows to active-MR states, with published/closed
-     moved to a second "Other documents" section for 6/7/7a's actions.
+  5b. Reset, and repurpose "Your documents" — DONE (2026-09-13,
+     add-reset-and-panel-scope). Reset replaces the open note with what its
+     own tracked branch holds — never the default branch, always behind a
+     confirmation, pending/changes-requested only. That confirmation is the
+     condition the NO CI PIPELINE amendment exempts Reset on; never add an
+     unasked variant. "Your documents" keeps never-submitted and unresolved
+     too; published/not-accepted move to a second "Other documents" section
+     for visibility — 6/7/7a's actions render for the open note, not there.
      `docs/panel-tracking-scope.md`.
-  6. Send updates — DONE (2026-09-12, add-resubmission-lifecycle).
-     Resubmit after "Changes requested": edit, click Send update, it
-     commits to the existing branch/MR. NOT blocked: this path has an open
-     merge request and a live branch, which the revisions rule already
-     settles.
-     CORRECTED 2026-09-12, and this REVERSES a clause that stood here:
-     "and flips back to pending". It does not, and could not. A document
-     is changes-requested because its merge request carries an unresolved
-     review thread (milestone 5's mechanism), and pushing a commit does
-     not resolve a thread — only the reviewer, or the author in GitLab,
-     does. The push succeeds and the content lands regardless; the
-     DISPLAYED state is left to the next refresh, like every other state
-     change, and a document pushed while changes-requested may correctly
-     still read as changes-requested afterward. Optimistically flipping
-     the local record was rejected: it would show a state the remote does
-     not hold and take it back on the next refresh. It does depend on
-     `last_commit_id`, since this is the first update to an existing file.
-     Resubmitting after a document was NOT accepted is a different path —
-     closed merge request, stale branch — and belongs to milestone 7a, not
-     here. (That pointer read "whichever milestone takes the
-     branch-recreation design question" while the question was open; it is
-     answered and the milestone is numbered.)
-     Revising an already-PUBLISHED document is a third path again — merged
-     merge request, branch already deleted — and belongs to milestone 7,
-     not here. It reuses the `last_commit_id` handling this milestone
-     builds.
-     CLAIMS THE PRE-SUBMIT CHECKS, added 2026-08-26 — this is the first
-     milestone where a document is submitted a SECOND time, so it is
-     where the duplicate-`doc_id` check and then the path-mismatch check
-     first bind, in that order, per the refuse-to-move decision below.
-     It therefore also makes the reconciliation call that reads the
-     remote path, which milestone 5 built.
-     WAS VERIFIED NOT BUILT (refused outright, nothing written); shipped
-     2026-09-12 as one change with 7 and 7a, because all three forked in
-     the same function on the same one-line bug. The pre-submit checks
-     above bind from that change onward, in the documented order, for
-     every resolved state. `docs/resubmission-lifecycle.md`.
-  7. Revise a published document — DONE (2026-09-12,
-     add-resubmission-lifecycle). ADDED 2026-08-26, closing an oversight
-     rather than adding scope. A published document had no way back into
-     review: milestone 6 scopes itself to an open merge request with a
-     live branch, the unnumbered placeholder takes a closed merge request
-     with a stale branch, and nobody claimed the third state — merged
-     merge request, branch already auto-deleted. It was not in the
-     out-of-scope list either, so by this file's own rule it was an
-     oversight, not a decision.
-     State it starts from: the document shows "Published". The merge
-     request merged and the branch is gone.
-     Action: the author edits the note and submits, which starts a NEW
-     cycle. The plugin cuts a fresh branch from the current remote
-     `main` — explicitly not from a local cache, nor from anything left
-     over from the previous cycle — recreates `doc/<doc_id>` under the
-     same immutable `doc_id`, and opens a new merge request. The author
-     sees "Waiting for review" again, exactly as at first submission.
-     UNBLOCKED. It never inherited the branch-recreation question's forks:
-     that question had two cases, and case 2 — this milestone — was
-     answered in the same decision that raised it, cut from current
-     `main`. Nothing is in the way on the remote, so there was nothing to
-     fork on. Case 1 has since been answered too (2026-09-09, closed is
-     terminal), which is what turned the resubmit-after-rejection
-     placeholder into milestone 7a — a sibling that reuses THIS
-     milestone's fresh-cut path rather than building its own.
-     It also does not depend on milestone 8: a document reaches
-     "Published" whenever someone merges it, and on this instance that can
-     happen in GitLab's own interface. The plugin does not have to be the
-     merger for this milestone to have work to do.
-     Real dependencies: milestone 4 for the write path, and milestone 5 to
-     read the published state.
-     WHY IT SITS AT 7 rather than straight after 5, which its dependencies
-     would allow. Two reasons, both about milestone 6:
-       - `last_commit_id`. This milestone updates a file that already
-         exists in `main`, so it needs that handling — and milestone 6
-         builds it, claiming to be "the first update to an existing file".
-         Landing this one first would silently make that claim false.
-       - Priority. Milestone 6 unblocks an author stuck at "Changes
-         requested", which every first review cycle can hit. This
-         milestone matters only once a document has completed a cycle. By
-         this list's own reasoning — a stuck author is worse than a
-         reviewer without a Merge button — the common path goes first.
-     It is otherwise a sibling of milestone 6, not a successor: neither
-     needs the other's author-facing behaviour, only the shared plumbing.
-     If milestone 6 slips, this can go first, provided whoever takes it
-     also builds `last_commit_id` and corrects milestone 6's note.
-     CLAIMS THE PRE-SUBMIT CHECKS TOO, added 2026-08-26: a published
-     document being revised is a second submit, so the duplicate-`doc_id`
-     and path-mismatch checks bind here exactly as in milestone 6. If
-     this lands first, it builds them and milestone 6's note above is the
-     one to correct.
-     WAS VERIFIED BROKEN: a hardcoded `action: 'create'` failed against a
-     published document's own path. FIXED 2026-09-12 — the commit verb is
-     the caller's parameter now, decided from the file's actual presence
-     on the default branch rather than assumed from the state, and an
-     update carries `last_commit_id`. `docs/resubmission-lifecycle.md` §2.
-     The note above about milestone 6 building `last_commit_id` first is
-     moot: both shipped together, in one change, for the reason that
-     section now records.
-  7a. Resubmit after "Not accepted" — DONE (2026-09-12,
-     add-resubmission-lifecycle). NUMBERED 2026-09-09, having been an
-     unnumbered placeholder while the branch-recreation question was open.
-     That question is now answered (closed is terminal; cut fresh from
-     current `main`), which is what this milestone was waiting for.
-     Numbered `7a` rather than renumbering 8, following the same
-     convention and the same reason as `4a`: this list's numbering is
-     dependency order, the file cross-references milestones by number in a
-     dozen places, and renumbering turns every missed reference into a
-     silently wrong pointer.
-     Sits after 7 and before 8 because it needs 7's write path — both cut
-     `doc/<doc_id>` fresh from current `main` and open a new merge
-     request, which is the convergence the case-1 decision produced — and
-     because a stuck author is a worse problem than a reviewer without a
-     Merge button.
-     Author-facing outcome that closes it, unchanged from when this was a
-     placeholder: a document showing "Not accepted" offers one action that
-     gets the author submitting again, and the stale branch from the
-     rejected cycle does not surface to them or block them. That second
-     clause is now this milestone's concrete work, not an aspiration: the
-     plugin deletes the stale branch itself and then cuts fresh, decided
-     2026-09-09 in the architecture decisions. The branch-delete method
-     that needs is NOT added here: the fix-interrupted-submit change adds
-     git-publishing's first destructive call, ahead of this milestone,
-     because an interrupted submit needs the same delete. This milestone
-     REUSES it and adds the author-facing state and action around it.
-     Depends on milestone 5 reporting closed merge requests correctly
-     (hence the all-states reconciliation query), on milestone 6's update
-     path, and on milestone 7's fresh-cut path.
-     WAS VERIFIED PARTIALLY BUILT: delete-then-recreate worked, but no
-     panel action triggered it — only the wordless command palette.
-     CLOSED 2026-09-12: the mechanism is untouched and the panel now
-     offers a named action for this state, as it does for the other three.
-     The two pre-submit checks bind here too, which they never did before.
-     The row this action renders on is still 5b's to relocate
-     (`docs/panel-tracking-scope.md`); this change did not move it.
+  6, 7, 7a. Send updates / Revise a published document / Resubmit after
+     "Not accepted" — ALL THREE DONE (2026-09-12, add-resubmission-
+     lifecycle), shipped as ONE change because all three forked in the
+     same function on the same one-line bug. COMPRESSED here 2026-09-13:
+     each entry's pre-implementation sequencing debate (why 7 sat after 6,
+     what depended on what, what to do if one slipped) is preserved
+     verbatim in that change's archived proposal/design and in
+     `docs/resubmission-lifecycle.md`; only what a future reader must not
+     re-break is kept below.
+     WHAT SHIPPED: `performSubmit` forks on whether the note carries a
+     frozen `doc_id`; a tracked note goes to `performResubmit`, which runs
+     the two pre-submit checks and then acts on the resolved state —
+     pending/changes-requested commit an update to the existing branch
+     with no new merge request; published and not-accepted clear any
+     lingering branch, cut fresh from the CURRENT default branch, and open
+     a new one. Full behaviour: `docs/resubmission-lifecycle.md` §0.
+     THREE RULES NOT TO RE-BREAK:
+       - "Flips back to pending" is WRONG and was corrected here. A
+         document is changes-requested because its merge request carries
+         an unresolved thread; pushing a commit does not resolve one. The
+         push lands regardless and the DISPLAYED state waits for the next
+         refresh. Optimistically flipping the local record was rejected —
+         it shows a state the remote does not hold.
+       - The commit verb is READ from the file's actual presence on the
+         target ref, never inferred from the state. A Maintainer may have
+         moved a published file; someone may have published into a
+         turned-down document's path.
+       - The two pre-submit checks (duplicate `doc_id`, then path
+         mismatch, in that order) bind for EVERY resolved state, not some.
+     `last_commit_id` is read immediately before each write, never carried
+     over from state resolution.
+     NOTHING WAS OWED TO 5b (corrected 2026-09-13): these render for the
+     CURRENTLY OPEN note, never as row buttons, so 5b's narrowing stranded
+     nothing — it buys visibility (`docs/panel-tracking-scope.md`).
   8. Review and merge — reviewer-facing pending list and a Merge action,
      gated by the real protected-branch permission check, never a role
      label. UNBLOCKED on the tier question: confirmed GitLab CE, so

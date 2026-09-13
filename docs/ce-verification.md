@@ -750,6 +750,57 @@ ordering ever changes, restore the four-state requirement with it:
       400, classified `content-changed`, and the author was told someone else
       had changed the document rather than to check their connection.
 
+### D9. Reset, and the panel's two sections
+
+Added by add-reset-and-panel-scope (its tasks.md 6.1-6.5), recorded HERE for
+the same reason D8 is: they can only be run against a real instance, and this
+file is where that evidence lives. NOT RUN AS OF 2026-09-13 — the change
+shipped with its code paths reasoned through and its build clean, and
+everything below still owed.
+
+Reset is the plugin's only destructive local write, so treat an unexpected
+result here as blocking rather than cosmetic.
+
+- [ ] **Reset restores exactly.** Edit a note whose document is **awaiting
+      review**, press Reset, confirm. The note afterwards matches what the
+      document carries on its own tracked branch **byte for byte, front
+      matter included**. Repeat with a document in **changes requested**.
+      If the front matter differs at all, the write is re-asserting fields it
+      must not touch — see `openspec/config.yaml`'s front matter contract.
+- [ ] **Dismissing writes nothing.** Press Reset and dismiss the prompt every
+      way out it has — Cancel, Escape, the close button, clicking away. The
+      note is untouched in all four. A single path that writes anyway is the
+      exact case the NO CI PIPELINE amendment exempts Reset on.
+- [ ] **A finished review refuses cleanly.** MERGE the document's merge
+      request — or close it AND then press "Delete source branch" — WITHOUT
+      refreshing the panel, then press Reset.
+      CORRECTED 2026-09-13, this check's own first wording said "merge or
+      close". Closing ALONE does not work and is not a bug: closing leaves
+      the branch standing, so `fetchResetContent` finds the file exactly
+      where it expects and the reset SUCCEEDS. What this check needs is the
+      branch GONE, which a merge does (source-branch deletion is on by
+      default) and a close does not. The note
+      is left untouched and the author is told the reset did not happen. It
+      must NOT pull the default branch's content — that would be content from
+      a different cycle, written over local work. This is the one check that
+      exercises `fetchResetContent`'s missing fallback, so it is the one
+      worth running first.
+- [ ] **The sections partition.** With a document in each of the five states
+      — never submitted, awaiting review, changes requested, published, not
+      accepted — "Your documents" holds the first three and "Other documents"
+      holds the last two. Then break the refresh so one document resolves to
+      nothing: it stays in "Your documents" with no state label, and does not
+      move.
+- [ ] **The resubmit actions still work after the narrowing.** Open a
+      published note and a not-accepted note in turn. Each still offers its
+      own resubmit action ("Submit a new version" / "Submit again") and each
+      still works, even though neither is in "Your documents" any more. No
+      Reset button appears for either.
+
+Depends on A6/A7 and B7: Reset reads the merge request's changed path and
+then the file's raw content. A failure here may be either of those rather
+than the reset logic — check which call refused before assuming the latter.
+
 ---
 
 ## Recording what you find

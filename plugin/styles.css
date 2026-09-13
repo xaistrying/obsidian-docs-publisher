@@ -73,3 +73,25 @@
 	font-size: var(--font-ui-smaller);
 	white-space: nowrap;
 }
+
+/* "Other documents" — published and not-accepted documents still in the
+   vault. Lower prominence than "Your documents" above it, not hidden: the
+   author should be able to see that a document exists and where it stands
+   without it competing with the list they check for work. Muted heading,
+   smaller rows, and extra space above so the two read as separate lists
+   rather than one long one. */
+.docs-publisher-documents-secondary {
+	margin-top: var(--size-4-6);
+}
+
+.docs-publisher-documents-secondary h4 {
+	margin: 0;
+	color: var(--text-muted);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-normal);
+}
+
+.docs-publisher-documents-secondary .docs-publisher-document-name {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
