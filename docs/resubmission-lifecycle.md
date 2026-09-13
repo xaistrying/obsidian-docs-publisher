@@ -33,7 +33,16 @@ the real state:
 2. **Path mismatch** — the note's path against the path the document's own
    merge request changed, case-sensitive; refuses naming the path to restore.
    A path that could not be ESTABLISHED (no submission, or a merge request
-   that changed other than exactly one file) is never read as "no path".
+   that changed other than exactly one MARKDOWN file) is never read as "no
+   path".
+
+   The markdown qualifier arrived with add-attachment-sync (2026-09-13) and
+   is the reason this check still binds. A submission now carries the note
+   AND the images it embeds, so the old "exactly one file" rule would have
+   answered "could not be determined" for every illustrated document — and
+   this check SKIPS on that answer rather than refusing, so it would have
+   stopped binding silently. The rule lives in `getMergeRequestChangedPath`;
+   nothing here changed to accommodate it.
 
 Both bind for every resolved state, not for some. Then
 `resolveDocumentState` (`submission-tracking/document-state.ts`) resolves

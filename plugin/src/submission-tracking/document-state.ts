@@ -11,9 +11,14 @@ import { branchForDocId } from './resolve';
  * `remotePath` is null for two different reasons and the caller must treat
  * them the same way — as "not established" and never as "no path":
  * the document has no submission at all, or its submission changed something
- * other than exactly one file, which `getMergeRequestChangedPath` reports as
- * an answer rather than a failure. Refusing a submit on an unestablished
- * path would mean naming a path to restore that was never read.
+ * other than exactly one MARKDOWN file, which `getMergeRequestChangedPath`
+ * reports as an answer rather than a failure. Refusing a submit on an
+ * unestablished path would mean naming a path to restore that was never read.
+ *
+ * The markdown qualifier is what keeps this answer alive for an illustrated
+ * document, whose submission carries its note AND the images it embeds. The
+ * rule lives in that one function; nothing here changed to accommodate it
+ * (add-attachment-sync design.md decision 1).
  */
 export interface DocumentState {
 	document: ResolvedDocument;

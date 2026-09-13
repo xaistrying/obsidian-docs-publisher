@@ -195,6 +195,14 @@ merge-request-fallback path lookup (a record with no stored path).
   own "could not be determined" answer is built for — it is failure, not an
   ambiguous-changed-path case, and should classify accordingly.
 - **Where it bites:** `getMergeRequestChangedPath` in `gitlab-client.ts`.
+- **WIDER BLAST RADIUS than when this item was written.** It said "used only
+  by recovery's fallback"; that is no longer true. As of
+  add-resubmission-lifecycle and add-attachment-sync, three behaviours read
+  this answer — the pre-submit path-mismatch check, Reset, and recovery's
+  fallback — and the first of them SKIPS its check rather than refusing when
+  the path cannot be determined. So an endpoint that is gone or refused does
+  not merely disable recovery's fallback: it silently removes the
+  refuse-to-move guarantee from every document. Check this one first.
 - **If it's wrong (permission):** a legacy record (no stored path) with an
   open review fails to resolve as recoverable even though its content is
   reachable — reads as "not recoverable" rather than as a missing checkbox.
@@ -445,6 +453,126 @@ Added by add-resubmission-lifecycle.
   If CE words it differently, or localizes it, the write is still REFUSED —
   it just classifies as `unexpected` and the author gets the vaguer message.
   So check the exact wording on CE, and widen the pattern if it differs.
+
+### B9. A commit with several actions and mixed verbs is accepted
+
+Added by add-attachment-sync. **This is the irreducible one of the three: a
+test can only assert what this project BELIEVES the API wants, and this file
+exists because that belief has been wrong twice already.**
+
+- **Assumed:** `POST /projects/:id/repository/commits` accepts an `actions`
+  array with more than one entry, and accepts `create` and `update` entries
+  mixed in the same array, applying all of them as a single commit — so a
+  rejected action leaves NONE of the files written and no branch
+  half-created.
+- **Where it bites:** `createBranchWithCommit` and `commitToBranch` in
+  `gitlab-client.ts`, which is every write path the plugin has.
+- **If it's wrong:** every submit of a document that embeds an image fails.
+  A document that embeds nothing still builds a single-entry array, exactly
+  as it did before this change, so the no-attachment case is unaffected either
+  way — which is the one thing that makes this a survivable surprise rather
+  than a broken plugin.
+- **How to check:** submit a document embedding two images, one of which is
+  already on the default branch (so its verb is `update`) and one of which is
+  not (`create`). Confirm one commit lands carrying all three files.
+
+- [x] Checked. CONFIRMED 2026-09-13 on `gitlab.com/styl-group1/kb-docs` — NOT
+  on the target CE 19.3.0 instance (§0). `test-015` embedded two images, one
+  already on `main` from a merged `test-014` and one not. ONE commit
+  `cb4133e9` carried all three files with the verbs mixed:
+
+      new      test/img-new.png
+      modified test/img-shared.png
+      new      test/test-015.md
+
+  So `actions` accepts several entries, accepts `create` and `update` in the
+  same array, and applies them as one commit.
+  ALSO OBSERVED, and it settles the ordering question cheaply: the commit
+  message read `Add test/test-015.md`. `commitMessage` names `actions[0]`, so
+  the note really is first in the array. The `/diff` listing above is NOT
+  evidence of order — GitLab sorts it by path, which is why `img-` precedes
+  `test-` there.
+  TRAP THAT COST TWO RUNS, worth repeating for whoever reruns this on CE:
+  installing a new `main.js` changes nothing until Obsidian RELOADS the
+  plugin. Two documents published without their attachments and looked like
+  an embed-resolution bug; the running code simply predated this change.
+
+### B10. A per-action `last_commit_id` is honoured beyond the first action
+
+- **Assumed:** the guard B8 confirmed for a single-action commit applies
+  per-action: a stale `last_commit_id` on the SECOND or later entry is
+  refused, not ignored.
+- **Where it bites:** every attachment an illustrated document shares with
+  another document. The note is always first in the array, so an attachment's
+  guard is never the first one.
+- **If it's wrong:** SILENT, and it is the same silent failure B8 warns
+  about, one position further along. Two authors revising documents that
+  embed the same image would overwrite each other's version of it with no
+  error anywhere. This is the check worth doing carefully.
+- **How to check:** exactly as B8, but with the stale id on the second
+  action rather than the first. Read an attachment's `last_commit_id`,
+  change that file through the web UI, then POST a two-action commit whose
+  first action is a valid note write and whose second carries the now-stale
+  id. Confirm the whole commit is rejected and the note is NOT written.
+  A probe that cannot fail is not evidence — confirm the id actually moved
+  before sending.
+
+- [x] Checked. CONFIRMED 2026-09-13 on `gitlab.com/styl-group1/kb-docs` — NOT
+  on the target CE 19.3.0 instance (§0). Run by `b10.sh` at the repo root,
+  which creates the staleness itself with a legitimate intermediate commit
+  rather than relying on a hand edit, and aborts unless it has watched the id
+  actually move.
+  Two actions were sent against `doc/test-015`: a VALID note update first,
+  then an attachment update carrying a now-stale id.
+
+      probe commit : HTTP 400
+      {"message":"The file has changed since you started editing it:
+                  test/img-shared.png"}
+
+  BOTH halves hold, and the body proves the first one rather than implying
+  it: the refusal NAMES `test/img-shared.png`, which is `actions[1]`, so the
+  server evaluated the second action's guard rather than stopping at the
+  first. And the note's `last_commit_id` was identical before and after, so
+  the valid action was rolled back with the refused one — the commit is
+  atomic, which is what "one commit or not at all" depends on.
+  CONSEQUENCE worth noting for whoever reads the author-facing side: a
+  refusal caused by an ATTACHMENT still reaches the author as
+  `CONTENT_CHANGED_MESSAGE`, which says "Someone else changed this document".
+  Accurate about what happened and about what to do, slightly imprecise about
+  WHICH file moved — it may have been an image the document embeds rather
+  than the note. Left as-is; noted so it is a known imprecision rather than a
+  surprise.
+
+### B11. Binary content survives as base64 through `requestUrl`
+
+- **Assumed:** an action carrying `encoding: "base64"` alongside base64
+  content produces a file on the remote byte-identical to the local one, and
+  Obsidian's `requestUrl` does not mangle that content on the way.
+- **Where it bites:** `commitActions` in `gitlab-client.ts`, which sets
+  `encoding` per action, and `readAttachmentBytes` in `vault-attachments.ts`,
+  which produces the base64 through Obsidian's own `arrayBufferToBase64`.
+- **If it's wrong:** images publish corrupted rather than missing, which is
+  worse than the bug this change fixes — a broken embed is visible, a
+  corrupted PNG may not be until someone opens it.
+- **How to check:** submit a document embedding a PNG. Confirm the image
+  renders in the GitLab UI, then download the committed file and compare its
+  checksum against the local one (`sha256sum`). Rendering alone is not
+  enough: a truncated file can still render.
+
+- [x] Checked. CONFIRMED 2026-09-13 on `gitlab.com/styl-group1/kb-docs` — NOT
+  on the target CE 19.3.0 instance (§0). Run by `b11.sh` at the repo root.
+  A 1920x1080 PNG committed through the plugin came back byte-identical:
+  280747 bytes both sides, `file` reporting the same PNG on each, matching
+  PNG magic, and equal sha256. So `encoding: "base64"` per action and
+  `readAttachmentBytes`'s use of Obsidian's `arrayBufferToBase64` round-trip
+  through `requestUrl` without mangling.
+  METHOD NOTE, because the first attempt reported a FALSE mismatch: a bare
+  `curl -o` with no status check wrote an auth-failure JSON body into the
+  file and the checksum then compared that against a PNG. The shell variable
+  holding the token was simply unset — the probe scripts prompt for it rather
+  than exporting it. `b11.sh` checks the HTTP status before comparing
+  anything, and prints sizes, `file` output and header bytes so a mismatch
+  says WHICH kind it is. Do not re-run this with a bare checksum.
 
 ---
 

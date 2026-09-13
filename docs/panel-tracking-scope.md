@@ -48,6 +48,13 @@ from the note's own vault path, per `docs/document-identity.md` §4 — a note
 moved locally since submit would otherwise read as absent rather than as
 the moved note it is.
 
+That read identifies the document as the one MARKDOWN file the merge request
+changed, narrowed from "the one file" by add-attachment-sync (2026-09-13):
+a submission now carries the note and the images it embeds, and the old rule
+would have left Reset unable to determine a path for any illustrated
+document. Reset fails safe on that answer, so it would have gone dead rather
+than gone wrong — but dead for exactly the documents the corpus is full of.
+
 The write is `resetDocument` (`plugin/src/doc-authoring/reset-document.ts`),
 alongside `recover-document.ts`, guarded on a note actually existing at that
 path — the opposite of `recoverDocument`'s guard. It writes the remote's

@@ -151,51 +151,37 @@ context: |
      do not bind on a FIRST submit: nothing is on the remote yet, so
      there is no path to drift from. They bind from the second submit
      onward, which makes them milestone 6's and milestone 7's to enforce.
-  4a. Attachment sync — ADDED 2026-08-26, closing an oversight rather
-     than adding scope. Numbered `4a` ON PURPOSE: this list's numbering
-     is dependency order, so a milestone that executes between 4 and 5
-     must read that way. Renumbering 5 through 8 was rejected — this file
-     cross-references milestones by number in a dozen places and every
-     miss becomes a silently wrong pointer.
-     The gap: milestone 4 commits one file, the note. A document that
-     embeds an image publishes with a broken embed, in GitLab and
-     anywhere downstream. The corpus does use images, so this is the
-     normal case for a Diagnostic Reference or a Known Errors document,
-     not an edge case. It appeared in neither this list nor the
-     out-of-scope list, which by this file's own rule makes it an
-     oversight, not a decision.
-     Sits AFTER milestone 4 because it rewrites that milestone's commit
-     payload from a single file action into an actions array. Building
-     the array in milestone 4 speculatively would violate the proposal
-     rule against abstractions with no user-visible surface calling them.
-     Milestones 6 and 7 then inherit it for free — they commit through
-     the same path.
-     CORRECTED 2026-09-12: not a hard blocker either way — 6/7 only vary
-     the verb and `start_branch`, fine against today's single-action
-     payload; if they land first, 4a generalizes their logic instead.
-     Three things make this larger than "parse the file and base64 the
-     images", and its design must answer all three:
-       - `![[image.png]]` CONTAINS NO PATH. Obsidian resolves wikilinks
-         by shortest-path lookup through `metadataCache`. A regex over
-         the text yields a filename, not a location, and guesses wrong
-         the moment two folders hold a same-named image. Resolution goes
-         through Obsidian's own resolver. Standard `![alt](path.png)`
-         links ARE paths and behave differently; both forms exist.
-       - SHARED ATTACHMENTS. A logo embedded in twenty documents means
-         twenty branches writing one path. A `create` action fails when
-         the file already exists on `main`, so the plugin must send
-         `update` with that file's own `last_commit_id` instead — and if
-         two authors submit DIFFERENT content at one path on concurrent
-         branches, the second merge is a genuine content conflict the
-         plugin cannot resolve and whose name the author-facing
-         vocabulary rule bans.
-       - ORPHANS. Unlinking or moving an image locally strands the old
-         remote file. Consistent with the refuse-to-move contract below,
-         this milestone NEVER DELETES: orphaned attachments accumulate
-         and a Maintainer clears them in GitLab, the same escape hatch
-         reorganization already uses.
-     Attachment paths follow the same 1:1 vault mirroring as documents
-     and are pushed from their location at submit time.
+  4a. Attachment sync — DONE (2026-09-13, add-attachment-sync), write
+     side only. Numbered `4a` because this list's numbering is dependency
+     order and renumbering 5-8 would silently break a dozen
+     cross-references; `5a`/`5b`/`7a`/`9a` follow the same convention.
+     WHAT SHIPPED: the commit payload is an actions array — the note plus
+     every image it embeds, each at its vault path, each with its own verb
+     and, where it updates, its own `last_commit_id`. All four write paths
+     build it, so none can commit the note alone.
+     FOUR RULES NOT TO RE-BREAK:
+       - NEVER DELETES. Unlinking or moving an image strands the remote
+         copy; orphans accumulate and a Maintainer clears them in GitLab,
+         the same escape hatch reorganization uses. `CommitAction` has no
+         `delete` member, which is what makes this structural.
+       - Wikilinks resolve through Obsidian's own resolver, never a regex
+         over the note's text: `![[image.png]]` carries a filename, not a
+         location. Markdown-style `![alt](path.png)` resolves as a path
+         relative to the note. An embed that resolves to nothing is
+         SKIPPED, never a refusal — a typo must not block publishing.
+       - The verb is read per file from the target ref, the same rule 6/7
+         established for the note. A shared attachment already on `main`
+         is an update carrying its own guard. Two authors writing
+         different bytes to one path stays unresolvable by the plugin;
+         the guard makes the second write fail loudly.
+       - `getMergeRequestChangedPath` now means "exactly one MARKDOWN
+         file", which is what keeps the path-mismatch check, Reset and
+         recovery's fallback working for an illustrated document. Taking
+         on note-in-note transclusion is what would break it.
+     Attachment paths follow the same 1:1 vault mirroring as documents and
+     are pushed from their location at submit time. Tests arrived with
+     this change (Vitest, `npm test`); the three facts only a server can
+     settle are `docs/ce-verification.md` §B9-B11.
   5. See your status — DONE (2026-09-11, add-document-status). Sidebar
      lists the author's own docs with their current state, resolved via
      reconciliation from front-matter `doc_id` alone. Read-only from the
@@ -301,6 +287,15 @@ context: |
      trace of, unlike 5a's recovery. Unmilestoned until `future-work.md`
      parked it; revisited now. Open whether the target corpus carries
      this plugin's contract. Import, not sync. `docs/panel-tracking-scope.md`.
+  9a. Attachment sync, read side — ADDED 2026-09-13 (add-attachment-sync
+     deferred it explicitly rather than omitting it). 4a pushes
+     attachments UP; nothing pulls them down. Recover restores a note's
+     text alone, so a recovered document still has broken embeds, and
+     milestone 9's Import inherits the same gap. Suffixed `9a` on the
+     usual convention: it extends 5a's Recover and 9's Import rather than
+     sitting between two milestones, so nothing renumbers. Blocked on
+     nothing — it is deferred work, not dropped work, which is why it is
+     numbered here rather than parked below.
   Not yet milestoned, and not accidentally: multi-platform support (out of
   scope per git-publishing's capability boundary, not merely deferred),
   offline queueing (explicit non-goal), note-in-note transclusion —

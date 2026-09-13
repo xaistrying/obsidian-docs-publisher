@@ -1,6 +1,6 @@
 import { Notice } from 'obsidian';
 import type { App, TFile } from 'obsidian';
-import type { CommitAction, ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
+import type { CommitFileAction, ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
 import {
 	branchExists,
 	commitToBranch,
@@ -9,7 +9,6 @@ import {
 	deleteBranch,
 	findOpenMergeRequest,
 	getDefaultBranch,
-	getFileCommitId,
 	getFileContent,
 } from '../git-publishing/gitlab-client';
 import type { ConnectionState } from '../platform-config/connection-state';
@@ -24,12 +23,15 @@ import type { Category } from './categories';
 import type { SubmitModalResult } from './submit-modal';
 import { SubmitModal } from './submit-modal';
 import { deriveDocId } from './doc-id';
+import { resolveEmbeddedAttachments } from './embeds';
 import {
 	readSubmissionFields,
 	withSubmissionFrontMatter,
 	writeSubmissionFrontMatter,
 } from './front-matter';
 import { RECOVER_LABEL, recoverDocument } from './recover-document';
+import { buildSubmissionFiles } from './submission-files';
+import { submissionFileReads, vaultEmbedIndex } from './vault-attachments';
 
 export const NO_ACTIVE_NOTE_MESSAGE = 'Open the note you want to submit first.';
 
@@ -285,7 +287,13 @@ async function performSubmit(
 	// would trivially answer yes about itself (that change's design.md
 	// decision 5). The resubmit path asks the two questions that ARE right
 	// for a second submit instead; see `performResubmit`.
-	if (!(await checkTargetPathFree(app, details, state, file.path))) {
+	//
+	// Hands back the default branch it had to read to ask the question, which
+	// is the ref the write below is cut from and the ref every file's verb is
+	// decided against. Read once and passed along rather than read again: two
+	// reads are two chances to get two answers for one commit.
+	const defaultBranch = await checkTargetPathFree(app, details, state, file.path);
+	if (defaultBranch === null) {
 		return;
 	}
 
@@ -314,13 +322,52 @@ async function performSubmit(
 		docId,
 	});
 
+	const files = await collectSubmissionFiles(app, details, file, content, defaultBranch);
+	if (files === null) {
+		return;
+	}
+
 	await openNewCycle(app, details, file, result, store, {
 		docId,
 		branch,
-		content,
-		action: 'create',
+		files,
 		completeFrontMatter: { title: result.title, category: result.category },
 	});
+}
+
+/**
+ * The note plus the images it embeds, each with the verb that writes it —
+ * every write path's single source for what a submission carries, so none of
+ * the four can commit the note alone (tasks.md 5.4).
+ *
+ * `ref` is the ref the commit lands on, and every file's verb is decided
+ * against it: the project's default branch for the three paths that cut a
+ * fresh branch from it, and the document's own branch for a revision pushed to
+ * one already under review.
+ *
+ * Returns null when something failed, having already told the author. Embed
+ * resolution itself cannot fail — an embed that resolves to nothing is
+ * skipped, never refused (design.md decision 2) — so a null here is always the
+ * remote, never the note.
+ */
+async function collectSubmissionFiles(
+	app: App,
+	details: ConnectionDetails,
+	file: TFile,
+	content: string,
+	ref: string
+): Promise<CommitFileAction[] | null> {
+	const attachmentPaths = resolveEmbeddedAttachments(file.path, vaultEmbedIndex(app));
+	const files = await buildSubmissionFiles(
+		{ notePath: file.path, noteContent: content, attachmentPaths },
+		submissionFileReads(app, details, ref)
+	);
+	if (!files.ok) {
+		reportFailure(files);
+		return null;
+	}
+
+	return files.value;
 }
 
 /**
@@ -384,7 +431,25 @@ async function performResubmit(
 			return;
 		}
 
-		await openNewCycle(app, details, file, result, store, { docId, branch, content, action: 'create' });
+		const defaultBranch = await getDefaultBranch(details);
+		if (!defaultBranch.ok) {
+			reportFailure(defaultBranch);
+			return;
+		}
+
+		// The verb is READ here, where it used to be hardcoded to `create`. The
+		// two are the same answer for the ordinary case this path exists for —
+		// an attempt that never reached the default branch — and differ for the
+		// one it also catches: a document whose record was lost after it was
+		// published, whose file IS on the default branch and for which `create`
+		// is rejected outright. Reading it costs one request and follows the
+		// same rule every other file now follows (design.md decision 3).
+		const files = await collectSubmissionFiles(app, details, file, content, defaultBranch.value);
+		if (files === null) {
+			return;
+		}
+
+		await openNewCycle(app, details, file, result, store, { docId, branch, files });
 		return;
 	}
 
@@ -393,7 +458,7 @@ async function performResubmit(
 	switch (submission.state) {
 		case 'pending':
 		case 'changes-requested':
-			await pushUpdate(details, file, store, {
+			await pushUpdate(app, details, file, store, {
 				docId,
 				branch,
 				content,
@@ -420,20 +485,29 @@ async function performResubmit(
  * moments apart — a reviewer editing in the Web IDE between them is precisely
  * the case `last_commit_id` exists to catch, and reusing a stale value would
  * turn the guard into decoration.
+ *
+ * The same read now covers the attachments too, against this document's OWN
+ * branch rather than the default one: an image added to the note since the
+ * last revision belongs in this commit, and an image already sitting on this
+ * branch from a previous revision is an update to it.
  */
 async function pushUpdate(
+	app: App,
 	details: ConnectionDetails,
 	file: TFile,
 	store: SubmissionStore,
 	params: { docId: string; branch: string; content: string; state: SubmissionState; mrIid: number }
 ): Promise<void> {
-	const current = await getFileCommitId(details, { path: file.path, ref: params.branch });
-	if (!current.ok) {
-		reportFailure(current);
+	const files = await collectSubmissionFiles(app, details, file, params.content, params.branch);
+	if (files === null) {
 		return;
 	}
 
-	if (!current.value.exists) {
+	// The note is first by construction, so this is the note's own verb. An
+	// image newly embedded since the last revision is legitimately a `create`
+	// in this same commit; the NOTE being a create is not — it would mean the
+	// file is not on the branch at all.
+	if (files[0]?.action !== 'update') {
 		// The path check above passed, so either it had no remote path to
 		// compare against or the file sits elsewhere on the branch than the
 		// submission's own changed path said. Either way there is nothing here
@@ -446,12 +520,7 @@ async function pushUpdate(
 		return;
 	}
 
-	const commit = await commitToBranch(details, {
-		branch: params.branch,
-		filePath: file.path,
-		content: params.content,
-		lastCommitId: current.value.commitId,
-	});
+	const commit = await commitToBranch(details, { branch: params.branch, files });
 	if (!commit.ok) {
 		reportFailure(commit);
 		return;
@@ -522,17 +591,16 @@ async function openFreshCycle(
 		return;
 	}
 
-	const current = await getFileCommitId(details, { path: file.path, ref: defaultBranch.value });
-	if (!current.ok) {
-		reportFailure(current);
+	const files = await collectSubmissionFiles(app, details, file, params.content, defaultBranch.value);
+	if (files === null) {
 		return;
 	}
 
-	const write: { action: CommitAction; lastCommitId?: string } = current.value.exists
-		? { action: 'update', lastCommitId: current.value.commitId }
-		: { action: 'create' };
-
-	await openNewCycle(app, details, file, result, store, { ...params, ...write });
+	await openNewCycle(app, details, file, result, store, {
+		docId: params.docId,
+		branch: params.branch,
+		files,
+	});
 }
 
 /**
@@ -554,9 +622,13 @@ async function openNewCycle(
 	params: {
 		docId: string;
 		branch: string;
-		content: string;
-		action: CommitAction;
-		lastCommitId?: string;
+		/**
+		 * Everything this commit carries — the note first, then the images it
+		 * embeds — each already holding its own verb and, where it updates, its
+		 * own guard. Built by `collectSubmissionFiles` against the ref this
+		 * branch is cut from, so no path here can commit the note alone.
+		 */
+		files: readonly CommitFileAction[];
 		/**
 		 * The three fields to complete on the NOTE once the remote has accepted
 		 * the write — present only on a FIRST submit, which is the one moment
@@ -569,10 +641,7 @@ async function openNewCycle(
 ): Promise<void> {
 	const commit = await createBranchWithCommit(details, {
 		branch: params.branch,
-		filePath: file.path,
-		content: params.content,
-		action: params.action,
-		...(params.lastCommitId === undefined ? {} : { lastCommitId: params.lastCommitId }),
+		files: params.files,
 	});
 	if (!commit.ok) {
 		reportFailure(commit);
@@ -644,31 +713,36 @@ function findDuplicateNote(app: App, file: TFile, docId: string): TFile | null {
  * Absent → the path is free, proceed. Failed → refuse; a failed read is
  * never treated as absence, the same mistake `branchExists`'s own design
  * note warns against (design.md decision 2).
+ *
+ * Answers with the default branch it read rather than a bare `true`, since
+ * the caller needs that same ref to decide every file's verb against and
+ * reading it twice would be two answers for one commit. Null is the refusal,
+ * and the author has already been told why.
  */
 async function checkTargetPathFree(
 	app: App,
 	details: ConnectionDetails,
 	state: ConnectionState,
 	path: string
-): Promise<boolean> {
+): Promise<string | null> {
 	const defaultBranch = await getDefaultBranch(details);
 	if (!defaultBranch.ok) {
 		reportFailure(defaultBranch);
-		return false;
+		return null;
 	}
 
 	const existing = await getFileContent(details, { path, ref: defaultBranch.value });
 	if (!existing.ok) {
 		reportFailure(existing);
-		return false;
+		return null;
 	}
 
 	if (!existing.value.exists) {
-		return true;
+		return defaultBranch.value;
 	}
 
 	offerRecovery(app, details, state, path, existing.value.content);
-	return false;
+	return null;
 }
 
 /**

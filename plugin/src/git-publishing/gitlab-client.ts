@@ -84,12 +84,47 @@ export interface OpenMergeRequest {
 export type FileContent = { exists: true; content: string } | { exists: false };
 
 /**
- * Which verb a commit uses for the one file it writes. Decided by the
+ * Which verb a commit uses for one of the files it writes. Decided by the
  * CALLER from the document's resolved state, never re-derived here — this
  * module supplies the write and has no opinion on when either verb is
  * appropriate (`submit-document.ts` owns that; design.md decision 3).
+ *
+ * `delete` is deliberately not one of them and never becomes one. Unlinking
+ * an image locally strands its remote copy, orphans accumulate, and a
+ * Maintainer clears them in GitLab — the same escape hatch reorganization
+ * already uses (add-attachment-sync design.md decision 6). Leaving the verb
+ * out of the type is what makes "the plugin never deletes an attachment" a
+ * property of the code rather than a promise about it (that change's
+ * tasks.md 5.5).
  */
 export type CommitAction = 'create' | 'update';
+
+/**
+ * One file's place in a commit: where it goes, what it carries, which verb
+ * writes it, and — for an `update` — the commit id that write is guarded
+ * against.
+ *
+ * A commit takes an ARRAY of these as of add-attachment-sync, because a
+ * document and the images it embeds are one submission and must land in one
+ * commit or not at all: a note published without its pictures has broken
+ * embeds, and a picture published without its note is an orphan nobody
+ * references.
+ *
+ * `encoding` is absent for text and `base64` for bytes. An image sent as
+ * text arrives corrupted, so this is the difference between an attachment
+ * that renders and one that does not. GitLab's acceptance of it is the one
+ * part of this payload that could not be settled without the server — see
+ * `docs/ce-verification.md`.
+ */
+export interface CommitFileAction {
+	filePath: string;
+	content: string;
+	action: CommitAction;
+	/** Only meaningful for `update`; see `getFileCommitId`. */
+	lastCommitId?: string;
+	/** Omitted for text content, which is every markdown file. */
+	encoding?: 'base64';
+}
 
 /**
  * The commit a file currently carries at a path and ref, as a THREE-WAY
@@ -232,29 +267,27 @@ function highestAccessLevel(permissions: unknown): number | null {
 }
 
 /**
- * Creates a new branch and commits one file to it in a single call. The
- * branch is created from the project's default branch, never from the given
- * branch name (which does not exist yet) — see `docs/document-identity.md`
- * §1 for why the branch itself is a snapshot, not a derivation.
+ * Creates a new branch and commits one OR MORE files to it in a single call.
+ * The branch is created from the project's default branch, never from the
+ * given branch name (which does not exist yet) — see
+ * `docs/document-identity.md` §1 for why the branch itself is a snapshot, not
+ * a derivation.
  *
- * `action` is the CALLER's decision, not this function's. It was once
- * hardcoded to `create`, which was correct only because the one caller was a
- * first submit; a published document's new cycle cuts from a default branch
- * that ALREADY holds the file, and `create` against an existing path is
+ * Each file's `action` is the CALLER's decision, not this function's. It was
+ * once hardcoded to `create`, which was correct only because the one caller
+ * was a first submit; a published document's new cycle cuts from a default
+ * branch that ALREADY holds the file, and `create` against an existing path is
  * rejected outright (`docs/resubmission-lifecycle.md` §2). An `update` carries
  * `lastCommitId` so the write fails rather than silently overwriting a file
  * that moved on since it was read.
+ *
+ * GitLab applies the whole actions array as ONE commit, so a rejected action
+ * leaves none of the files written and no branch half-created — which is what
+ * lets a document and its attachments be submitted as a single thing.
  */
 async function createBranchWithCommit(
 	details: ConnectionDetails,
-	params: {
-		branch: string;
-		filePath: string;
-		content: string;
-		action: CommitAction;
-		/** Only meaningful for `update`; see `getFileCommitId`. */
-		lastCommitId?: string;
-	}
+	params: { branch: string; files: readonly CommitFileAction[] }
 ): Promise<ClientResult<CommitResult>> {
 	const defaultBranch = await getDefaultBranch(details);
 	if (!defaultBranch.ok) {
@@ -264,8 +297,8 @@ async function createBranchWithCommit(
 	return postCommit(details, {
 		branch: params.branch,
 		start_branch: defaultBranch.value,
-		commit_message: commitMessage(params.action, params.filePath),
-		actions: commitActions(params),
+		commit_message: commitMessage(params.files),
+		actions: commitActions(params.files),
 	});
 }
 
@@ -278,49 +311,68 @@ async function createBranchWithCommit(
  * 4).
  *
  * This is the revision path — a document already under review, whose branch
- * and submission both exist and must be left alone. `lastCommitId` is
- * required rather than optional here: an update to a branch under active
- * review is exactly where a concurrent edit can be silently overwritten.
+ * and submission both exist and must be left alone. The note's own action is
+ * always an `update` carrying a `lastCommitId`: an update to a branch under
+ * active review is exactly where a concurrent edit can be silently
+ * overwritten. An attachment newly embedded since the last revision is a
+ * `create` in the same commit, which is why the verb is per-file here rather
+ * than fixed for the call.
  */
 async function commitToBranch(
 	details: ConnectionDetails,
-	params: { branch: string; filePath: string; content: string; lastCommitId: string }
+	params: { branch: string; files: readonly CommitFileAction[] }
 ): Promise<ClientResult<CommitResult>> {
 	return postCommit(details, {
 		branch: params.branch,
-		commit_message: commitMessage('update', params.filePath),
-		actions: commitActions({ ...params, action: 'update' }),
+		commit_message: commitMessage(params.files),
+		actions: commitActions(params.files),
 	});
 }
 
 /**
  * The one `actions: [...]` payload both commit calls build, so the two can
- * never disagree about the shape of a write (tasks.md 1.4).
+ * never disagree about the shape of a write (tasks.md 2.3).
  *
- * `last_commit_id` is omitted rather than sent as `undefined` when there is
- * none: GitLab rejects the key with an empty value, and a `create` has
- * nothing for it to be stale relative to.
+ * `last_commit_id` and `encoding` are omitted rather than sent as `undefined`
+ * when there is none: GitLab rejects a key with an empty value, a `create`
+ * has nothing for a commit id to be stale relative to, and text carries no
+ * encoding flag at all.
  */
-function commitActions(params: {
-	action: CommitAction;
-	filePath: string;
-	content: string;
-	lastCommitId?: string;
-}): unknown[] {
-	const action: Record<string, unknown> = {
-		action: params.action,
-		file_path: params.filePath,
-		content: params.content,
-	};
-	if (params.lastCommitId !== undefined) {
-		action['last_commit_id'] = params.lastCommitId;
-	}
+function commitActions(files: readonly CommitFileAction[]): unknown[] {
+	return files.map((file) => {
+		const action: Record<string, unknown> = {
+			action: file.action,
+			file_path: file.filePath,
+			content: file.content,
+		};
+		if (file.lastCommitId !== undefined) {
+			action['last_commit_id'] = file.lastCommitId;
+		}
+		if (file.encoding !== undefined) {
+			action['encoding'] = file.encoding;
+		}
 
-	return [action];
+		return action;
+	});
 }
 
-function commitMessage(action: CommitAction, filePath: string): string {
-	return `${action === 'create' ? 'Add' : 'Update'} ${filePath}`;
+/**
+ * Named for the FIRST file, which callers put the document itself at — the
+ * attachments riding along with it are not what the commit is about, and
+ * listing them would bury the one path a human reading the history is looking
+ * for.
+ *
+ * An empty array cannot reach here: every caller builds the note's own action
+ * first, and a commit carrying no files would be rejected by GitLab anyway.
+ * The fallback exists so this cannot produce `Add undefined`.
+ */
+function commitMessage(files: readonly CommitFileAction[]): string {
+	const first = files[0];
+	if (first === undefined) {
+		return 'Update documents';
+	}
+
+	return `${first.action === 'create' ? 'Add' : 'Update'} ${first.filePath}`;
 }
 
 /** POSTs a prepared commit body and reads the resulting commit id out of it. */
@@ -761,14 +813,37 @@ async function findOpenMergeRequest(
 }
 
 /**
- * Reads the single file path a merge request's own commit changed, when it
- * changed exactly one. Reports "could not be determined" as `ok: true,
- * value: null` for zero or more than one changed path — a successful answer
- * distinct from a failed lookup — rather than guessing among several. Used
- * only as recovery's fallback for a record with no stored path (this
- * change's (add-document-recovery) design.md decision 1): guessing wrong
- * here would recreate a note under a path that is not actually its remote
- * identity.
+ * Reads the path of the DOCUMENT a merge request changed, distinguishing it
+ * from the attachments that commit carried alongside it. Reports "could not be
+ * determined" as `ok: true, value: null` — a successful answer distinct from a
+ * failed lookup — rather than guessing among several.
+ *
+ * THE RULE IS "EXACTLY ONE MARKDOWN FILE", not "exactly one file". It was the
+ * latter until add-attachment-sync, and that version answered null for every
+ * illustrated document the moment a submission started carrying the images its
+ * note embeds — which is not a cosmetic loss. Three shipped behaviours read
+ * this answer: the pre-submit path-mismatch check, Reset, and recovery's
+ * fallback for a record with no stored path. Two of them fail safe and go
+ * dead; the path-mismatch check SILENTLY STOPS BINDING, because a path it
+ * cannot establish is skipped rather than refused. So the filter below is what
+ * keeps the refuse-to-move guarantee alive for a document with a picture in
+ * it. None of the three callers changed; the repair is here, in the one
+ * function all three share (design.md decision 1).
+ *
+ * The filter is exact rather than heuristic UNDER THE CURRENT MODEL, and only
+ * under it: attachments are images by definition, and note-in-note
+ * transclusion is out of scope project-wide, so no second markdown file can
+ * appear in a document's own merge request. IF TRANSCLUSION IS EVER SUPPORTED,
+ * THIS RULE IS WHAT IT BREAKS — a document embedding another note would carry
+ * two markdown files and go back to answering null. This paragraph is the
+ * notice, so that change meets the problem rather than discovering it
+ * (tasks.md 3.2).
+ *
+ * REJECTED: matching the changed path against `doc_id`. It looks exact and is
+ * not — `doc_id` is ASCII-folded from the filename at first submit, so a note
+ * named `Bảo-trì.md` has `doc_id: Bao-tri` and its remote path's basename
+ * legitimately differs. That would fail for exactly the documents this
+ * project's own corpus is most likely to hold.
  *
  * Classified through `classifyScopedStatus`, like the other merge-request
  * reads. Permission name NOT YET OBSERVED.
@@ -787,14 +862,33 @@ async function getMergeRequestChangedPath(
 	}
 
 	const changes = (result.value as { changes?: unknown }).changes;
-	if (!Array.isArray(changes) || changes.length !== 1) {
+	if (!Array.isArray(changes)) {
 		return { ok: true, value: null };
 	}
 
-	const entry = changes[0];
-	const path =
-		typeof entry === 'object' && entry !== null ? (entry as { new_path?: unknown }).new_path : undefined;
-	return { ok: true, value: typeof path === 'string' && path !== '' ? path : null };
+	const markdown = changes.map(changedPath).filter(isMarkdownPath);
+	return { ok: true, value: markdown.length === 1 ? markdown[0] : null };
+}
+
+/** One `changes` entry's `new_path`, or null when the entry is not that shape. */
+function changedPath(entry: unknown): string | null {
+	if (typeof entry !== 'object' || entry === null) {
+		return null;
+	}
+
+	const path = (entry as { new_path?: unknown }).new_path;
+	return typeof path === 'string' && path !== '' ? path : null;
+}
+
+/**
+ * Case-insensitive on the EXTENSION alone. A vault holding `Notes.MD` is
+ * unusual but not wrong, and reading it as a non-document would silently cost
+ * that document the same three behaviours this filter exists to preserve. The
+ * path itself is never case-folded: `Known-errors/` and `known-errors/` are
+ * different locations, and `submit-document.ts` compares them exactly.
+ */
+function isMarkdownPath(path: string | null): path is string {
+	return path !== null && /\.md$/i.test(path);
 }
 
 /**
