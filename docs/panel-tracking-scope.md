@@ -204,7 +204,7 @@ plugin already has a trace of        no record, no note to key off
   decision 3 already established. The two settings must never be wired
   together.
 
-### The legacy-content question — STILL UNANSWERED, check before scoping further
+### The legacy-content question — ANSWERED 2026-09-14
 
 `future-work.md` raised this and it has not been checked against the
 actual target project since: **does every file in the target GitLab
@@ -218,6 +218,34 @@ content, backfilling required fields) than pulling down something this
 tool already wrote in its own shape. This is the single fact most likely
 to change this milestone's size, and it is answerable by looking at the
 actual project rather than reasoned about further here.
+
+**It was looked at. 34 files on `ivan/service.doc.kb`; full results in
+`docs/ce-verification.md` §E2.** None carries all seven fields, and the
+headline number is misleading. What the corpus is missing is exactly the
+set this plugin writes at creation and first submit — `doc_id`,
+`category`, `lifecycle`, sometimes `created` — while `title`, `owner` and
+`last_reviewed` are present nearly everywhere. That is a SUBSET of the
+contract, not a rival convention.
+
+`doc_id` in particular is *supposed* to be absent: it is snapshotted from
+the filename at first submit, and the corpus filenames already are the
+control IDs `docs/document-identity.md` §3 assumed
+(`BOA-SOP-001_…`, `SBT-KE-001_…`). `category` is collected in the submit
+modal. Only `lifecycle` and `created` are genuine backfill candidates, and
+both have obvious defaults.
+
+So the larger feature this section feared — adopting foreign content and
+backfilling seven required fields — is NOT what milestone 9 faces. Read
+tree, write file, and let the ordinary first-submit path fill the rest.
+
+**The real blocker is elsewhere, and it is not about front matter at
+all.** See `docs/ce-verification.md` §E3: an imported document has no
+`doc_id`, so its first submit takes the first-submit path, where
+`checkTargetPathFree` refuses it — a file exists at its path on the
+default branch, which is true of every imported document by construction.
+Import as currently conceived produces documents that cannot then be
+submitted. That is milestone 9's central design problem and should be
+settled in its proposal before anything else about Import is scoped.
 
 ### Import, not sync — the boundary stays where future-work.md drew it
 

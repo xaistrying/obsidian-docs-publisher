@@ -265,9 +265,12 @@ context: |
      label. UNBLOCKED on the tier question: confirmed GitLab CE, so
      required approvals can never gate the merge here — the protected
      `main` branch's "Allowed to merge" permission is the only real
-     control the Merge action can rely on. Still open: the actual
-     "Allowed to merge" role list for the target project has not been
-     checked yet — the mechanism is settled, that specific value is not.
+     control the Merge action can rely on. CLOSED 2026-09-14: the value
+     was read on the target project — `main` merges and pushes are
+     Maintainers-only, in the shape the code expects
+     (`docs/ce-verification.md` §E1). WEIGH BEFORE BUILDING: authors hold
+     Developer, so this milestone's whole surface never appears for the
+     account that does every other operation here.
      UNBLOCKED on the self-merge governance question too, as of
      2026-09-09: self-merge is accepted and the plugin adds no
      author-identity check, so the Merge action's behaviour no longer
@@ -285,8 +288,19 @@ context: |
      is undecided (`docs/resubmission-lifecycle.md` §6).
   9. Discover & Import — ADDED. Every remote document the vault has no
      trace of, unlike 5a's recovery. Unmilestoned until `future-work.md`
-     parked it; revisited now. Open whether the target corpus carries
-     this plugin's contract. Import, not sync. `docs/panel-tracking-scope.md`.
+     parked it; revisited now. Import, not sync.
+     SIZING ANSWERED 2026-09-14 (`docs/ce-verification.md` §E2): the real
+     corpus carries `title`/`owner`/`last_reviewed` and lacks
+     `doc_id`/`category`/`lifecycle` — a SUBSET of the contract, not a
+     conflicting convention, and exactly what documents this plugin never
+     created would lack. `doc_id` derives from the filename at first
+     submit as designed. So: smaller than feared, not a backfill engine.
+     THE REAL BLOCKER is not front matter (§E3): an imported document has
+     no `doc_id`, so its first submit takes the first-submit path, where
+     `checkTargetPathFree` refuses it — a file DOES exist at its path on
+     the default branch, by construction. Import currently produces
+     unsubmittable documents. Resolve that in this milestone's design
+     before anything else. `docs/panel-tracking-scope.md`.
   9a. Attachment sync, read side — ADDED 2026-09-13 (add-attachment-sync
      deferred it explicitly rather than omitting it). 4a pushes
      attachments UP; nothing pulls them down. Recover restores a note's

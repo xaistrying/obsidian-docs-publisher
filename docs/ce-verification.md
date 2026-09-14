@@ -33,11 +33,17 @@ Fill this in when you run the checks:
 
 | | |
 |---|---|
-| Instance URL | |
-| Edition (CE / EE / gitlab.com) | |
-| Version | |
-| Date run | |
-| Project used | |
+| Instance URL | `https://git.styl.solutions` |
+| Edition (CE / EE / gitlab.com) | **NOT YET CONFIRMED** — `/api/v4/version` not read (needs admin) |
+| Version | **NOT YET CONFIRMED** — assumed CE 19.3.0, never verified |
+| Date run | 2026-09-14 (§E only; sections A-D still un-rerun) |
+| Project used | `ivan/service.doc.kb` (the real corpus) |
+
+> **Partial run.** Only §E below has been run against this instance. Sections
+> A-D were run on `gitlab.com` and still owe a rerun here, per the rule above.
+> The instance's own edition and version remain unread, so even §E's findings
+> are "observed on the target PROJECT", not "observed on a confirmed CE 19.3.0
+> instance" — a distinction this file exists to keep.
 
 **You need:**
 
@@ -928,6 +934,119 @@ result here as blocking rather than cosmetic.
 Depends on A6/A7 and B7: Reset reads the merge request's changed path and
 then the file's raw content. A failure here may be either of those rather
 than the reset logic — check which call refused before assuming the latter.
+
+---
+
+## E. Facts observed about the target project, 2026-09-14
+
+Run against `ivan/service.doc.kb` on `https://git.styl.solutions` with a
+Developer-level token. These are not assumptions awaiting proof like §§A-D —
+they are answers to two questions milestones 8 and 9 were blocked on, and
+they are recorded here because this file is where observed facts live.
+
+Caveat that applies to both: the instance's edition and version were not
+read, so "self-managed CE 19.3.0" remains assumed. See §0.
+
+### E1. Who may merge into the default branch — OBSERVED
+
+Answers the question `openspec/config.yaml`'s milestone 8 entry carried as
+"the mechanism is settled, that specific value is not".
+
+```
+default_branch:                 main
+protected branch `main`
+  merge_access_levels:          ["Maintainers"]
+  push_access_levels:           ["Maintainers"]
+the account that ran this:      access_level 30 (Developer)
+```
+
+- **The mechanism is confirmed.** `GET /projects/:id/protected_branches/main`
+  returns `merge_access_levels[].access_level_description` in exactly the
+  shape `docs/gitlab-roles.md` §5 predicted and milestone 8 would parse. No
+  surprise here, and no code change implied.
+- **Merge is Maintainer-only on this project**, which is GitLab's default and
+  what §5 assumed. A Developer — the level this project's authors hold, and
+  the level `config.yaml`'s access-floor decision sets for creating and
+  submitting — will never be offered the Merge action.
+- **Consequence for milestone 8, worth weighing before building it:** it
+  delivers nothing to an author account. Its whole surface appears only for
+  whoever holds Maintainer. That does not invalidate the milestone, but it
+  does mean it cannot be tested or used by the same account that does every
+  other operation in this plugin.
+- **Self-merge is moot at this level.** The governance decision in
+  `docs/gitlab-roles.md` §5 (accepted; the plugin adds no author-identity
+  check) stands unchanged, but on this project GitLab already prevents a
+  Developer from merging their own document. The accepted risk is real only
+  for Maintainers.
+- **Push to `main` being Maintainer-only does NOT affect the plugin.** Every
+  write it makes goes to an unprotected `doc/<doc_id>` branch; it never
+  pushes to the default branch.
+
+### E2. Whether the corpus carries the front-matter contract — OBSERVED
+
+Answers `docs/panel-tracking-scope.md`'s "single fact most likely to change
+[milestone 9's] size". 34 markdown files surveyed; **none carries all seven
+required fields.**
+
+```
+missing almost universally:  doc_id, category, lifecycle
+sometimes also missing:      created
+present nearly everywhere:   title, owner, last_reviewed
+no front matter at all:      README.md, Global/Tools-&-Access.md
+```
+
+**Read the pattern before reading the headline.** "0 of 34 conform" sounds
+like a corpus using a foreign convention. It is not. What is missing is
+precisely the set of fields THIS PLUGIN writes at creation and at first
+submit, which documents it never created and never submitted would not have:
+
+- `doc_id` is *supposed* to be absent until first submit
+  (`docs/document-identity.md` §3). And the corpus filenames already ARE the
+  control IDs that decision assumed — `BOA-SOP-001_Update-Device-Details.md`,
+  `SBT-KE-001_EG95-mTLS-Socket-Reopen-Error200.md`. Deriving `doc_id` from
+  the filename at first submit yields the right value with no backfill.
+- `category` is collected in the submit modal, so it is filled at the moment
+  the plugin first takes the document on.
+- `lifecycle` and `created` are creation-time fields; a document the plugin
+  did not create has no chance to hold them. These are the only genuine
+  backfill candidates, and both have obvious defaults.
+
+So milestone 9 is closer to "read tree, write file, and let the ordinary
+first-submit path fill the rest" than to the backfill engine
+`panel-tracking-scope.md` feared. The corpus is a SUBSET of the contract, not
+a conflict with it.
+
+### E3. Import collides head-on with the first-submit pre-flight — VERIFIED IN CODE
+
+Found while reading E2's result, confirmed by reading
+`plugin/src/doc-authoring/submit-document.ts`. This is milestone 9's real
+design problem, and it is not about front matter.
+
+An imported document has no `doc_id`, so editing and submitting it takes the
+FIRST-submit path, which runs `checkTargetPathFree`. That pre-flight refuses
+when a file already exists at the note's path on the default branch — which
+is true of every imported document by construction:
+
+```
+Import a document → edit it → Submit
+  → no doc_id, so: first-submit path
+  → checkTargetPathFree: a file exists at this path on `main`
+  → REFUSED: "A document already exists at this location."
+  → the author is offered Recover instead
+```
+
+The pre-flight is not wrong. `add-document-recovery` built it to catch a new
+note colliding with a STRANGER's published document, and that signature —
+"no local `doc_id`, path occupied on `main`" — is exactly what a freshly
+imported document looks like. Import makes the legitimate case
+indistinguishable from the case the check exists to refuse.
+
+Milestone 9 must resolve this before it can ship anything usable; an Import
+that produces unsubmittable documents is worse than no Import. The obvious
+directions — have Import establish tracking so the note takes the RESUBMIT
+path instead, or teach the pre-flight to recognise an imported document — are
+not evaluated here, deliberately: that is design work for that change's own
+proposal.
 
 ---
 
