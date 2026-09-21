@@ -39,6 +39,7 @@ export type FailureKind =
 	| 'server-unreachable'
 	| 'insufficient-permission'
 	| 'content-changed'
+	| 'empty-repository'
 	| 'unexpected';
 
 export interface Identity {
@@ -135,6 +136,13 @@ export interface CommitFileAction {
  * staleness guard at all. See `getFileCommitId`.
  */
 export type FileCommitId = { exists: true; commitId: string } | { exists: false };
+
+/**
+ * An attachment's bytes at a path and ref, base64 as GitLab encodes them,
+ * and absent-vs-failed kept apart for the same reason every other read here
+ * keeps them apart — see `getFileBytes`.
+ */
+export type FileBytes = { exists: true; base64: string } | { exists: false };
 
 /**
  * One entry from the merge-request listing, carrying only what callers need.
@@ -561,6 +569,173 @@ async function getFileCommitId(
 	return { ok: true, value: { exists: true, commitId } };
 }
 
+/**
+ * Every file present on one ref, plus whether that is the whole story.
+ *
+ * Shaped exactly like `MergeRequestListing` above, and `truncated` is
+ * load-bearing here for the same kind of reason: a document missing from a
+ * truncated tree is indistinguishable from one the project does not have,
+ * and a caller resolving from that would tell the author the corpus lacks
+ * something it holds. See add-discover-and-import's design.md decision 7.
+ *
+ * Carries paths and nothing else. What a path MEANS — which of them are
+ * documents, which the vault already has — is submission-tracking's to
+ * decide, the same boundary `listMergeRequests` keeps.
+ */
+export interface RepositoryListing {
+	paths: string[];
+	truncated: boolean;
+}
+
+/**
+ * Reads a file's bytes at `path` and `ref`, base64-encoded — the THREE-WAY
+ * answer `getFileContent` and `getFileCommitId` return, for their reason.
+ *
+ * The counterpart to `getFileContent` for content that is NOT text. An image
+ * pulled through the `/raw` endpoint arrives as a string that has already
+ * been through a text decoding, and bytes that survive that round trip are
+ * the exception rather than the rule — so this hits the NON-raw
+ * `repository/files/:file_path` endpoint instead, whose JSON envelope carries
+ * `content` already base64-encoded, and hands that string straight to
+ * `base64ToArrayBuffer` without ever making it text.
+ *
+ * Same endpoint as `getFileCommitId`, reading the field that one deliberately
+ * ignores. Kept as its own call rather than widening that one: a caller
+ * establishing a write's verb has no use for a whole image's bytes, and
+ * `buildSubmissionFiles` asks that question for every file it commits.
+ *
+ * `encoding` is checked rather than assumed. GitLab has answered `base64`
+ * for this endpoint for as long as it has existed, but decoding whatever
+ * arrives as if it were base64 would corrupt an attachment silently, and a
+ * corrupted image is harder to notice than a missing one. Response shape NOT
+ * YET OBSERVED on the target instance — `docs/ce-verification.md` §E7.
+ */
+async function getFileBytes(
+	details: ConnectionDetails,
+	params: { path: string; ref: string }
+): Promise<ClientResult<FileBytes>> {
+	const result = await getRaw(
+		details,
+		`/projects/${encodeProject(details.projectId)}/repository/files/` +
+			`${encodeURIComponent(params.path)}?ref=${encodeURIComponent(params.ref)}`,
+		classifyScopedStatus
+	);
+	if (!result.ok) {
+		if (result.status === 404) {
+			return { ok: true, value: { exists: false } };
+		}
+
+		return failureFrom(result);
+	}
+
+	const body = result.value as { content?: unknown; encoding?: unknown };
+	if (body.encoding !== 'base64' || typeof body.content !== 'string') {
+		console.error(
+			`Docs Publisher: ${params.path} at ${params.ref} answered with encoding ` +
+				`${String(body.encoding)}, which this cannot decode.`
+		);
+		return { ok: false, failure: 'unexpected' };
+	}
+
+	return { ok: true, value: { exists: true, base64: body.content } };
+}
+
+/** GitLab's maximum, and what the tree read asks for on every page. */
+const TREE_ENTRIES_PER_PAGE = 100;
+
+/**
+ * Twenty pages of 100. Higher than the merge-request cap because this counts
+ * every file in the repository rather than one per document — images
+ * included — and the corpus it is sized against holds 34 documents
+ * (`docs/ce-verification.md` §E2). Reaching it is reported as `truncated`
+ * rather than swallowed.
+ */
+const TREE_PAGE_CAP = 20;
+
+/**
+ * Lists every FILE on `ref`, recursively, following pagination to
+ * `TREE_PAGE_CAP`.
+ *
+ * Folders are dropped: GitLab returns `tree` entries alongside `blob` ones
+ * and no caller here has a use for a directory. Dropping them at the edge
+ * keeps "a path in this listing is a file" true for everyone downstream
+ * rather than a rule each caller has to remember.
+ *
+ * Classified through `classifyScopedStatus`, like every other per-resource
+ * read: a fine-grained token gates this and GitLab names the permission it
+ * wanted. Permission name and response shape NOT YET OBSERVED on the target
+ * instance — `docs/ce-verification.md` §E4/§E5.
+ */
+async function listRepositoryFiles(
+	details: ConnectionDetails,
+	ref: string
+): Promise<ClientResult<RepositoryListing>> {
+	const filters = [
+		`ref=${encodeURIComponent(ref)}`,
+		'recursive=true',
+		`per_page=${TREE_ENTRIES_PER_PAGE}`,
+	];
+
+	const paths: string[] = [];
+	for (let page = 1; page <= TREE_PAGE_CAP; page++) {
+		const result = await getRaw(
+			details,
+			`/projects/${encodeProject(details.projectId)}/repository/tree?${filters.join('&')}&page=${page}`,
+			classifyScopedStatus
+		);
+		if (!result.ok) {
+			return failureFrom(result);
+		}
+
+		if (!Array.isArray(result.value)) {
+			return { ok: false, failure: 'unexpected' };
+		}
+
+		for (const raw of result.value) {
+			const entry = toTreeEntry(raw);
+			if (entry === null) {
+				return { ok: false, failure: 'unexpected' };
+			}
+			if (entry.type === 'blob') {
+				paths.push(entry.path);
+			}
+		}
+
+		// A short page is the last page — the same rule, and the same
+		// accepted extra request on an exactly-full final page, as
+		// `listMergeRequests`.
+		if (result.value.length < TREE_ENTRIES_PER_PAGE) {
+			return { ok: true, value: { paths, truncated: false } };
+		}
+	}
+
+	// The cap was reached with a full page still coming back. Reported as
+	// truncated even in the case where the repository is an exact multiple of
+	// the cap and the listing is in fact complete: the error is
+	// one-directional and in the safe direction.
+	console.error(
+		`Docs Publisher: repository listing hit its ${TREE_PAGE_CAP}-page cap ` +
+			`(${paths.length} files); the result is incomplete and must not be resolved from.`
+	);
+	return { ok: true, value: { paths, truncated: true } };
+}
+
+/** One tree entry's type and path, or null when it is not that shape. */
+function toTreeEntry(raw: unknown): { type: string; path: string } | null {
+	if (typeof raw !== 'object' || raw === null) {
+		return null;
+	}
+
+	const source = raw as Record<string, unknown>;
+	const type = source['type'];
+	const path = source['path'];
+	if (typeof type !== 'string' || typeof path !== 'string' || path === '') {
+		return null;
+	}
+
+	return { type, path };
+}
+
 /** GitLab's maximum, and what the listing asks for on every page. */
 const MERGE_REQUESTS_PER_PAGE = 100;
 
@@ -925,9 +1100,29 @@ async function getDefaultBranch(details: ConnectionDetails): Promise<ClientResul
 		return result;
 	}
 
-	const defaultBranch = (result.value as { default_branch?: unknown }).default_branch;
-	if (typeof defaultBranch !== 'string' || defaultBranch === '') {
-		return { ok: false, failure: 'unexpected' };
+	const project = result.value as { default_branch?: unknown; empty_repo?: unknown };
+	const defaultBranch = project.default_branch;
+
+	// AN EMPTY REPOSITORY IS REFUSED BEFORE ANYTHING IS WRITTEN, and this is
+	// the guard rather than a nicety — see `EMPTY_REPOSITORY_MESSAGE` for what
+	// happens without it. In an empty GitLab repository the FIRST branch
+	// created becomes the default branch, so a first submit makes its own
+	// `doc/<doc_id>` the default, its merge request cannot open (source and
+	// target are then the same branch), and every later submit collides with
+	// the document's own file. Observed on a real project 2026-09-21, which
+	// was left permanently unusable by it.
+	//
+	// `empty_repo` is checked as well as `default_branch`, because the two
+	// disagree: a fresh project can report a default branch NAME that no
+	// commit has created yet, and writing into that is exactly the trap.
+	if (project.empty_repo === true || typeof defaultBranch !== 'string' || defaultBranch === '') {
+		console.error(
+			`Docs Publisher: ${details.projectId} has no usable default branch ` +
+				`(default_branch=${JSON.stringify(defaultBranch)}, empty_repo=${String(project.empty_repo)}). ` +
+				'Publishing into an empty repository would make a document branch the default one; ' +
+				'give the project an initial commit first.'
+		);
+		return { ok: false, failure: 'empty-repository' };
 	}
 
 	return { ok: true, value: defaultBranch };
@@ -1323,12 +1518,14 @@ export {
 	createMergeRequest,
 	branchExists,
 	listMergeRequests,
+	listRepositoryFiles,
 	hasUnresolvedThreads,
 	findOpenMergeRequest,
 	deleteBranch,
 	getDefaultBranch,
 	getFileContent,
 	getFileCommitId,
+	getFileBytes,
 	commitToBranch,
 	getMergeRequestChangedPath,
 };

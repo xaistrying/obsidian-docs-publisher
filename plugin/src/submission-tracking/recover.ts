@@ -1,11 +1,13 @@
 import type { App } from 'obsidian';
-import type { ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
+import type { ClientResult, ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
 import {
 	findOpenMergeRequest,
 	getDefaultBranch,
 	getFileContent,
 	getMergeRequestChangedPath,
+	listRepositoryFiles,
 } from '../git-publishing/gitlab-client';
+import { deriveDocIdFromPath } from '../doc-authoring/doc-id';
 import type { ConnectionState } from '../platform-config/connection-state';
 import { grantsDocumentAccess } from '../platform-config/connection-state';
 import { listVaultDocuments } from './document-status';
@@ -53,13 +55,14 @@ export async function resolveOrphanedRecords(
 	vaultDocIds: ReadonlySet<string>
 ): Promise<OrphanResolutionResult> {
 	const documents: OrphanedDocument[] = [];
+	const lookup = defaultBranchLookup(details);
 
 	for (const record of store.allRecords()) {
 		if (vaultDocIds.has(record.docId)) {
 			continue;
 		}
 
-		const resolved = await resolveOne(details, record);
+		const resolved = await resolveOne(details, record, lookup);
 		if (!resolved.ok) {
 			return resolved.detail === undefined
 				? { ok: false, failure: resolved.failure }
@@ -85,7 +88,11 @@ type ResolveOneResult =
  * or one that changed more than one file — resolves as unrecoverable rather
  * than a guess (design.md decision 1).
  */
-async function resolveOne(details: ConnectionDetails, record: SubmissionRecord): Promise<ResolveOneResult> {
+async function resolveOne(
+	details: ConnectionDetails,
+	record: SubmissionRecord,
+	lookup: DefaultBranchLookup
+): Promise<ResolveOneResult> {
 	if (record.path !== undefined) {
 		return { ok: true, value: { recoverable: true, docId: record.docId, record, path: record.path } };
 	}
@@ -95,26 +102,118 @@ async function resolveOne(details: ConnectionDetails, record: SubmissionRecord):
 		return open;
 	}
 
-	if (open.value === null) {
-		return { ok: true, value: { recoverable: false, docId: record.docId, record } };
+	if (open.value !== null) {
+		const changedPath = await getMergeRequestChangedPath(details, open.value.iid);
+		if (!changedPath.ok) {
+			return changedPath;
+		}
+
+		if (changedPath.value !== null) {
+			return {
+				ok: true,
+				value: { recoverable: true, docId: record.docId, record, path: changedPath.value },
+			};
+		}
 	}
 
-	const changedPath = await getMergeRequestChangedPath(details, open.value.iid);
-	if (!changedPath.ok) {
-		return changedPath;
+	return onDefaultBranch(record, lookup);
+}
+
+/**
+ * THE THIRD FALLBACK, added 2026-09-20: the document's own file, found on the
+ * default branch by matching this record's `doc_id` against what the
+ * repository actually holds.
+ *
+ * Added because the two fallbacks above are weaker than the question deserves.
+ * Both need a MERGE REQUEST to read a path from, so a document whose review
+ * was merged or closed — the ordinary end state of a published document —
+ * resolved as "content can no longer be found automatically" while its file
+ * sat on the default branch the whole time. Discover, arriving later, listed
+ * that same file and offered to Import it: two lists, one document, opposite
+ * answers, observed together for the first time on 2026-09-20 (see
+ * `docs/panel-tracking-scope.md`). This is the stronger answer, so it is the
+ * one that wins, and the two lists stop disagreeing.
+ *
+ * Matched by DERIVED `doc_id`, through the same derivation import uses, and
+ * never by a constructed path. `docs/document-identity.md` §4 forbids
+ * guessing where a document lives, and this does not guess: it reads what is
+ * there and asks which file, if any, IS this document.
+ *
+ * EXACTLY ONE match is an answer. Several means two remote files derive one
+ * `doc_id` — the `README.md` case `docs/document-naming.md` documents — and
+ * the record could belong to either, so this declines rather than picking.
+ * Unrecoverable is still the honest answer there, and now it is the honest
+ * answer for a much smaller set of records.
+ */
+async function onDefaultBranch(
+	record: SubmissionRecord,
+	lookup: DefaultBranchLookup
+): Promise<ResolveOneResult> {
+	const paths = await lookup();
+	if (!paths.ok) {
+		return paths;
 	}
 
+	const matches = paths.value.filter((path) => deriveDocIdFromPath(path) === record.docId);
 	return {
 		ok: true,
 		value:
-			changedPath.value === null
-				? { recoverable: false, docId: record.docId, record }
-				: { recoverable: true, docId: record.docId, record, path: changedPath.value },
+			matches.length === 1
+				? { recoverable: true, docId: record.docId, record, path: matches[0] }
+				: { recoverable: false, docId: record.docId, record },
 	};
 }
 
+type DefaultBranchLookup = () => Promise<ClientResult<readonly string[]>>;
+
+/**
+ * The default branch's file listing, read AT MOST ONCE per resolution and
+ * only if some record actually needs it.
+ *
+ * Lazy because the fast path must stay free: a store whose every record
+ * carries its own path — which is every record written since
+ * add-document-recovery — resolves with no remote call at all, and making
+ * this eager would spend a listing on every refresh to answer nothing.
+ * Memoized because a store with twenty such records must not read the same
+ * listing twenty times.
+ */
+function defaultBranchLookup(details: ConnectionDetails): DefaultBranchLookup {
+	let cached: ClientResult<readonly string[]> | null = null;
+
+	return async () => {
+		if (cached !== null) {
+			return cached;
+		}
+
+		const ref = await getDefaultBranch(details);
+		if (!ref.ok) {
+			cached = ref;
+			return cached;
+		}
+
+		const listing = await listRepositoryFiles(details, ref.value);
+		// A TRUNCATED listing is not usable here and is deliberately not
+		// softened: "no file derives this `doc_id`" read off a partial listing
+		// would report a document unrecoverable that is merely unlisted, which
+		// is the exact wrongness `truncated` exists to prevent.
+		cached = listing.ok
+			? listing.value.truncated
+				? { ok: false, failure: 'unexpected' }
+				: { ok: true, value: listing.value.paths }
+			: listing;
+		return cached;
+	};
+}
+
+/**
+ * `ref` names WHICH ref the content was actually found on — the record's own
+ * branch or the default one. Carried because the attachment fetch that
+ * follows a recovery must pull a document's images from the same point in
+ * history as its text, and the two refs hold different content by
+ * construction for a document still under review.
+ */
 export type RecoveryContentResult =
-	| { kind: 'found'; content: string }
+	| { kind: 'found'; content: string; ref: string }
 	| { kind: 'absent' }
 	| { kind: 'failed'; failure: FailureKind; detail?: string };
 
@@ -142,7 +241,7 @@ export async function fetchRecoveryContent(
 		return failed(onBranch);
 	}
 	if (onBranch.value.exists) {
-		return { kind: 'found', content: onBranch.value.content };
+		return { kind: 'found', content: onBranch.value.content, ref: document.record.branch };
 	}
 
 	const defaultBranch = await getDefaultBranch(details);
@@ -155,7 +254,9 @@ export async function fetchRecoveryContent(
 		return failed(onDefault);
 	}
 
-	return onDefault.value.exists ? { kind: 'found', content: onDefault.value.content } : { kind: 'absent' };
+	return onDefault.value.exists
+		? { kind: 'found', content: onDefault.value.content, ref: defaultBranch.value }
+		: { kind: 'absent' };
 }
 
 function failed(result: { failure: FailureKind; detail?: string }): RecoveryContentResult {
@@ -207,6 +308,19 @@ class RecoveryHolder {
 
 	recordFailure(failure: FailureKind, detail?: string): void {
 		this.outcome = detail === undefined ? { kind: 'failed', failure } : { kind: 'failed', failure, detail };
+		this.notify();
+	}
+
+	/**
+	 * Throws the resolved set away and returns to never-checked, when the
+	 * connection details change. See `DocumentStatusHolder.clear` for the
+	 * reasoning; it bites hardest here, because every row in this list carries
+	 * a RECOVER BUTTON — so a stale list does not merely misinform, it offers
+	 * to write a note from a project the author has stopped pointing at.
+	 */
+	clear(): void {
+		this.documents = [];
+		this.outcome = { kind: 'never' };
 		this.notify();
 	}
 

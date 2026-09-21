@@ -63,6 +63,12 @@
 	overflow-wrap: anywhere;
 }
 
+/* A short state marker — "Waiting for review", "Not available". `nowrap` is
+   right for these and ONLY for these: it keeps the marker on one line beside
+   the name. Anything sentence-length put in this class is clipped at the
+   panel's edge rather than wrapped, which is what happened to the recovery
+   section's "content can no longer be found" message until 2026-09-20. A
+   sentence belongs in a `setting-item-description` paragraph, which wraps. */
 .docs-publisher-document-state {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
@@ -94,4 +100,85 @@
 .docs-publisher-documents-secondary .docs-publisher-document-name {
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
+}
+
+/* "Documents you can import" — documents the remote has that this vault does
+   not. Sits below both lists of documents the author already has, separated
+   by the same extra space "Other documents" uses, so the three read as three
+   lists rather than one long one. Rows carry a full remote path rather than a
+   filename, so the name column is allowed to wrap onto its own line and the
+   Import button stays put at the right. */
+.docs-publisher-documents-discover {
+	margin-top: var(--size-4-6);
+}
+
+.docs-publisher-documents-discover .docs-publisher-document-name {
+	flex: 1 1 100%;
+	font-size: var(--font-ui-smaller);
+}
+
+.docs-publisher-documents-discover .docs-publisher-document {
+	justify-content: space-between;
+}
+
+/* A refused import's reason, under the row it belongs to. Full width so it
+   wraps as prose rather than competing with the path and the Import button
+   for the same line, and indented so it reads as belonging to the row above
+   rather than as a new entry. */
+.docs-publisher-document-refusal {
+	flex: 1 1 100%;
+	margin: var(--size-4-1) 0 0;
+	padding-left: var(--size-4-2);
+	border-left: 2px solid var(--background-modifier-border);
+}
+
+/* Collapsible section headings, matching how Obsidian's own "Linked mentions"
+   / "Unlinked mentions" headings look: a title and a muted suffix carrying the
+   count, or the fact that the check failed. NO CHEVRON — those headings show
+   none, and one here pushed the title out of line with the panel's other
+   headings. The pointer cursor and the hover colour are the affordance.
+
+   The toggle is its own element rather than the whole header row, because the
+   row also holds "Import all" — making the row the click target would collapse
+   the section out from under that button as it was pressed. */
+.docs-publisher-section-toggle {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	cursor: var(--cursor);
+	flex: 1 1 auto;
+	min-width: 0;
+}
+
+.docs-publisher-section-toggle h4 {
+	margin: 0;
+}
+
+/* The only affordance left once the chevron is gone, so it does real work:
+   the heading lightens under the pointer, which is what says it is pressable. */
+.docs-publisher-section-toggle:hover h4,
+.docs-publisher-section-toggle:hover .docs-publisher-section-count {
+	color: var(--text-normal);
+}
+
+/* The count, or "(check failed)". Muted and small: it qualifies the heading
+   rather than competing with it, and it is the only thing a collapsed section
+   says beyond its own name. */
+.docs-publisher-section-count {
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+
+/* A section's own action row, under its heading and description rather than
+   beside the heading. "Your documents" keeps Refresh on the heading line
+   because that title is short; "Documents you can import" is long enough that
+   a button beside it wrapped the title across two lines to make room.
+
+   Left-aligned and unstretched, unlike `.docs-publisher-actions` above: that
+   row carries the panel's primary actions and fills the width to say so, and
+   this is a bulk action on one list below it. */
+.docs-publisher-section-actions {
+	display: flex;
+	margin: var(--size-4-2) 0;
 }

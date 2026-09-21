@@ -43,3 +43,22 @@ function isGitRefLegal(value: string): boolean {
 	}
 	return !ILLEGAL_CHARACTERS.test(value);
 }
+
+/**
+ * The `doc_id` a REMOTE path's filename derives to, by exactly the rule
+ * above — or null when that filename cannot be one.
+ *
+ * Shared by the two callers that ask the same question of a path rather than
+ * of a `TFile`: import, deciding what identity to freeze into a document it
+ * is about to write, and recovery, matching a stored record against the
+ * files the platform actually holds. Two spellings of one derivation would
+ * let those two disagree about which remote file IS a given document, which
+ * is the disagreement neither could detect.
+ */
+export function deriveDocIdFromPath(path: string): string | null {
+	const name = path.slice(path.lastIndexOf('/') + 1);
+	const dot = name.lastIndexOf('.');
+	// `dot <= 0` keeps a dotfile whole: `.gitkeep` is its own name, not an
+	// empty one with an extension.
+	return deriveDocId(dot <= 0 ? name : name.slice(0, dot));
+}

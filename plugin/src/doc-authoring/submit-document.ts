@@ -11,6 +11,7 @@ import {
 	getDefaultBranch,
 	getFileContent,
 } from '../git-publishing/gitlab-client';
+import { EMPTY_REPOSITORY_MESSAGE } from '../platform-config/access-messages';
 import type { ConnectionState } from '../platform-config/connection-state';
 import { resolveDocumentState } from '../submission-tracking/document-state';
 import { listVaultDocuments } from '../submission-tracking/document-status';
@@ -25,11 +26,11 @@ import { SubmitModal } from './submit-modal';
 import { deriveDocId } from './doc-id';
 import { resolveEmbeddedAttachments } from './embeds';
 import {
+	hasSubmissionCategory,
 	readSubmissionFields,
 	withSubmissionFrontMatter,
 	writeSubmissionFrontMatter,
 } from './front-matter';
-import { RECOVER_LABEL, recoverDocument } from './recover-document';
 import { buildSubmissionFiles } from './submission-files';
 import { submissionFileReads, vaultEmbedIndex } from './vault-attachments';
 
@@ -96,13 +97,26 @@ export const ALREADY_AWAITING_REVIEW_MESSAGE =
 /**
  * Shown when a first-time submit's target path already holds a published
  * document — add-document-recovery's path-collision pre-flight
- * (design.md decision 4). Offered alongside a Recover action built from the
- * content this same check already read, so the author's next step is
- * immediate rather than a dead end. Vocabulary-checked like everything else
- * here: no "branch", "commit", "merge request", "MR", "conflict", or "main".
+ * (design.md decision 4).
+ *
+ * IT USED TO CARRY A RECOVER BUTTON, and that button could never work.
+ * Corrected 2026-09-20. The path this check is called with is `file.path` —
+ * the path of the very note being submitted — so the note is sitting at it by
+ * definition, and `recoverDocument` refuses an occupied path first thing.
+ * Pressing Recover therefore always answered "a note already exists at this
+ * location, so nothing was recovered". The offer was dead from the day it
+ * shipped, and the message promising it was telling the author something
+ * false.
+ *
+ * So it now says what the author can ACTUALLY do. Both routes are real: a
+ * renamed note targets a free path, and a deleted one frees this path so the
+ * published document appears under "Documents you can import" on the next
+ * refresh. Vocabulary-checked like everything else here: no "branch",
+ * "commit", "merge request", "MR", "conflict", or "main".
  */
 export const ALREADY_PUBLISHED_MESSAGE =
-	'A document already exists at this location. You can recover it instead of starting a new one.';
+	'A document already exists at this location. Rename this note to publish it ' +
+	'separately, or delete it and import the existing one instead.';
 
 /**
  * The first of the two checks `docs/document-identity.md` §4 requires from
@@ -222,6 +236,29 @@ export function submitForReview(
 
 	const existing = readSubmissionFields(app, file);
 	if (existing === null) {
+		// An IMPORTED document: it carries `doc_id`, frozen at import, but has
+		// never been submitted from this vault, so the two fields a first
+		// submit writes were never written. This IS its first submit, so the
+		// modal COLLECTS them — which is not a breach of the front matter
+		// contract's "written once, at first submit, never again" but the
+		// literal performance of it, at the moment that had not happened yet.
+		//
+		// Without this, freezing `doc_id` at import only MOVES the refusal
+		// that `docs/ce-verification.md` §E3 documented: the first-submit
+		// path's collision check is dodged and this one takes its place, and
+		// an imported document is still not submittable. Observed in the
+		// running plugin 2026-09-14 (§E6).
+		if (!hasSubmissionCategory(app, file)) {
+			new SubmitModal(app, file, (result) => {
+				void performSubmit(app, details, gate, file, result, store, existingDocId, true);
+			}).open();
+			return;
+		}
+
+		// `category` is there, so a first submit did happen and the author has
+		// since emptied `title` (or made `category` one of nothing). Refused
+		// rather than re-collected: writing those back is the repeat write the
+		// contract forbids.
 		new Notice(INCOMPLETE_FRONT_MATTER_MESSAGE);
 		return;
 	}
@@ -266,7 +303,15 @@ async function performSubmit(
 	 * same document a second time under a second identity, which is the
 	 * corruption this whole sequence exists to prevent.
 	 */
-	existingDocId: string | null
+	existingDocId: string | null,
+	/**
+	 * Whether the note still needs `title` and `category` written to it —
+	 * true only for an imported document taking its first submit, which has a
+	 * frozen `doc_id` but has never been through the moment those two are
+	 * written. False for every other resubmit, where they are the author's by
+	 * hand and are never rewritten.
+	 */
+	completeFields = false
 ): Promise<void> {
 	const docId = existingDocId ?? deriveDocId(file.basename);
 	if (docId === null) {
@@ -276,7 +321,7 @@ async function performSubmit(
 
 	const branch = branchForDocId(docId);
 	if (existingDocId !== null) {
-		await performResubmit(app, details, file, result, store, docId, branch);
+		await performResubmit(app, details, file, result, store, docId, branch, completeFields);
 		return;
 	}
 
@@ -292,7 +337,7 @@ async function performSubmit(
 	// is the ref the write below is cut from and the ref every file's verb is
 	// decided against. Read once and passed along rather than read again: two
 	// reads are two chances to get two answers for one commit.
-	const defaultBranch = await checkTargetPathFree(app, details, state, file.path);
+	const defaultBranch = await checkTargetPathFree(details, file.path);
 	if (defaultBranch === null) {
 		return;
 	}
@@ -391,7 +436,9 @@ async function performResubmit(
 	result: SubmitModalResult,
 	store: SubmissionStore,
 	docId: string,
-	branch: string
+	branch: string,
+	/** See `performSubmit`'s parameter of the same name. */
+	completeFields: boolean
 ): Promise<void> {
 	// Check one. Purely local, so it costs no round trip and runs before any
 	// remote call at all — which is both what §4's ordering requires and,
@@ -419,7 +466,28 @@ async function performResubmit(
 		return;
 	}
 
-	const content = await app.vault.read(file);
+	const localContent = await app.vault.read(file);
+
+	// An imported document's first submit has to merge `title` and `category`
+	// into what is COMMITTED, exactly as a first submit does and for the
+	// identical reason (see `withSubmissionFrontMatter`): the local note is
+	// not written until the remote write has succeeded, so without this the
+	// content actually pushed would carry neither. `doc_id` is already in the
+	// block, frozen at import, and the merge replaces rather than duplicates
+	// it. Every other resubmit passes the note through untouched.
+	const content = completeFields
+		? withSubmissionFrontMatter(localContent, {
+				title: result.title,
+				category: result.category,
+				docId,
+			})
+		: localContent;
+
+	// The two fields to write to the NOTE itself once the remote has accepted
+	// the write, on the same one-moment rule `performSubmit` follows.
+	const completeFrontMatter = completeFields
+		? { title: result.title, category: result.category }
+		: undefined;
 
 	// A frozen `doc_id` the remote holds nothing for. Not one of the four
 	// tracked states and not a first submit either: the note has been through
@@ -449,7 +517,12 @@ async function performResubmit(
 			return;
 		}
 
-		await openNewCycle(app, details, file, result, store, { docId, branch, files });
+		await openNewCycle(app, details, file, result, store, {
+			docId,
+			branch,
+			files,
+			completeFrontMatter,
+		});
 		return;
 	}
 
@@ -464,12 +537,18 @@ async function performResubmit(
 				content,
 				state: submission.state,
 				mrIid: submission.mrIid,
+				completeFrontMatter,
 			});
 			return;
 
 		case 'published':
 		case 'closed':
-			await openFreshCycle(app, details, file, result, store, { docId, branch, content });
+			await openFreshCycle(app, details, file, result, store, {
+				docId,
+				branch,
+				content,
+				completeFrontMatter,
+			});
 			return;
 	}
 }
@@ -496,7 +575,15 @@ async function pushUpdate(
 	details: ConnectionDetails,
 	file: TFile,
 	store: SubmissionStore,
-	params: { docId: string; branch: string; content: string; state: SubmissionState; mrIid: number }
+	params: {
+		docId: string;
+		branch: string;
+		content: string;
+		state: SubmissionState;
+		mrIid: number;
+		/** Present only for an imported document's first submit; see `performSubmit`. */
+		completeFrontMatter?: { title: string; category: Category };
+	}
 ): Promise<void> {
 	const files = await collectSubmissionFiles(app, details, file, params.content, params.branch);
 	if (files === null) {
@@ -526,14 +613,27 @@ async function pushUpdate(
 		return;
 	}
 
-	// NOTHING is written to the note here. `title` and `category` are the
-	// author's own from the first submit onward and the plugin never writes
-	// them again (`openspec/config.yaml`'s front matter contract); `doc_id` is
-	// frozen and already present. Writing them back used to happen on every
-	// resubmit, and cost more than the contract breach: the content committed
-	// moments ago was read BEFORE that write, so every revision pushed the
-	// PREVIOUS revision's `title`. Observed 2026-09-12 — see
-	// `docs/resubmission-lifecycle.md`.
+	// NOTHING is written to the note here on an ordinary resubmit. `title` and
+	// `category` are the author's own from the first submit onward and the
+	// plugin never writes them again (`openspec/config.yaml`'s front matter
+	// contract); `doc_id` is frozen and already present. Writing them back
+	// used to happen on every resubmit, and cost more than the contract
+	// breach: the content committed moments ago was read BEFORE that write, so
+	// every revision pushed the PREVIOUS revision's `title`. Observed
+	// 2026-09-12 — see `docs/resubmission-lifecycle.md`.
+	//
+	// The ONE exception is an imported document's first submit, which reaches
+	// this path when a teammate already has a review open from the same
+	// branch. That note has never been through the moment those two fields are
+	// written, so this is that moment rather than a repeat of it — the same
+	// reasoning `submitForReview` states where it decides to collect them.
+	if (params.completeFrontMatter !== undefined) {
+		await writeSubmissionFrontMatter(app, file, {
+			...params.completeFrontMatter,
+			docId: params.docId,
+		});
+	}
+
 	// The state the REMOTE just reported, carried through unchanged — never
 	// set to `pending` here. A revision does not resolve an open review
 	// thread, so a document pushed while changes-requested is still
@@ -574,7 +674,13 @@ async function openFreshCycle(
 	file: TFile,
 	result: SubmitModalResult,
 	store: SubmissionStore,
-	params: { docId: string; branch: string; content: string }
+	params: {
+		docId: string;
+		branch: string;
+		content: string;
+		/** Present only for an imported document's first submit; see `performSubmit`. */
+		completeFrontMatter?: { title: string; category: Category };
+	}
 ): Promise<void> {
 	// A merged submission's branch is normally gone — GitLab deletes it — and
 	// a turned-down one's is normally still there. Neither is guaranteed, so
@@ -600,6 +706,7 @@ async function openFreshCycle(
 		docId: params.docId,
 		branch: params.branch,
 		files,
+		completeFrontMatter: params.completeFrontMatter,
 	});
 }
 
@@ -720,9 +827,7 @@ function findDuplicateNote(app: App, file: TFile, docId: string): TFile | null {
  * and the author has already been told why.
  */
 async function checkTargetPathFree(
-	app: App,
 	details: ConnectionDetails,
-	state: ConnectionState,
 	path: string
 ): Promise<string | null> {
 	const defaultBranch = await getDefaultBranch(details);
@@ -741,30 +846,24 @@ async function checkTargetPathFree(
 		return defaultBranch.value;
 	}
 
-	offerRecovery(app, details, state, path, existing.value.content);
-	return null;
-}
+	// LOGGED, because this refusal is the one the author cannot check.
+	// Every other failure here writes its URL, status and classification to
+	// the console; this one succeeded — it read a file and found one — so it
+	// wrote nothing, and an author told "a document already exists" had no way
+	// to see WHICH project, WHICH ref, or WHICH path was meant. Added
+	// 2026-09-20, after exactly that question could not be answered from the
+	// outside.
+	console.error(
+		`Docs Publisher: refusing to submit ${path} — a file already exists there ` +
+			`on ${defaultBranch.value} of project ${details.projectId}.`
+	);
 
-/**
- * The refusal notice for an already-published path, carrying the same
- * Recover action the panel's orphaned-record list offers — `recoverDocument`
- * itself is shared, so the author's next step is identical from either entry
- * point (tasks.md 3.3). Left open (duration 0) since it asks for a decision
- * rather than merely reporting one.
- */
-function offerRecovery(
-	app: App,
-	details: ConnectionDetails,
-	state: ConnectionState,
-	path: string,
-	content: string
-): void {
-	const message = document.createDocumentFragment();
-	message.createDiv({ text: ALREADY_PUBLISHED_MESSAGE });
-	message.createEl('button', { text: RECOVER_LABEL, cls: 'mod-cta' }).addEventListener('click', () => {
-		void recoverDocument(app, details, state, path, content);
-	});
-	new Notice(message, 0);
+	// Plain text, ordinary duration. This was a DocumentFragment carrying a
+	// Recover button held open until dismissed; see `ALREADY_PUBLISHED_MESSAGE`
+	// for why that button could never do anything. A notice that only reports
+	// behaves like every other notice here.
+	new Notice(ALREADY_PUBLISHED_MESSAGE);
+	return null;
 }
 
 /**
@@ -882,6 +981,15 @@ function reportFailure(
 	// step that passes its own message sends one.
 	if (result.failure === 'content-changed') {
 		new Notice(CONTENT_CHANGED_MESSAGE);
+		return;
+	}
+
+	// Same precedence and the same reasoning. "The document could not be
+	// submitted, try again" is actively wrong here: an empty project does not
+	// become non-empty by retrying, and this is the one failure whose fix is
+	// a thing the author does on the platform rather than in the plugin.
+	if (result.failure === 'empty-repository') {
+		new Notice(EMPTY_REPOSITORY_MESSAGE);
 		return;
 	}
 

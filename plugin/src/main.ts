@@ -7,7 +7,11 @@ import { createDocument } from './doc-authoring/create-document';
 // points to call. Distinct names here keep that call site from reading like
 // (and risking becoming) an accidental self-recursion.
 import { submitForReview as submitDocumentForReview } from './doc-authoring/submit-document';
-import { NO_DOCUMENT_ACCESS_MESSAGE, readOnlyMessage } from './platform-config/access-messages';
+import {
+	EMPTY_REPOSITORY_MESSAGE,
+	NO_DOCUMENT_ACCESS_MESSAGE,
+	readOnlyMessage,
+} from './platform-config/access-messages';
 import type { ConnectionState } from './platform-config/connection-state';
 import { ConnectionStateHolder, grantsAuthoring, grantsReadOnly } from './platform-config/connection-state';
 import { openSettingsTab } from './platform-config/open-settings';
@@ -29,6 +33,19 @@ import {
 	RESET_UNAVAILABLE_MESSAGE,
 	resetDocument as resetDocumentWrite,
 } from './doc-authoring/reset-document';
+import { attachmentReportMessage } from './doc-authoring/fetch-attachments';
+import {
+	IMPORT_ALL_LABEL,
+	IMPORT_FAILED_MESSAGE,
+	IMPORT_LABEL,
+	importDocument as importDocumentWrite,
+} from './doc-authoring/import-document';
+import type { ImportOutcome } from './doc-authoring/import-document';
+import type { DiscoverableDocument } from './submission-tracking/discover';
+import {
+	DiscoveryHolder,
+	refreshDiscoverableDocuments as refreshRemoteDiscoverableDocuments,
+} from './submission-tracking/discover';
 import type { OrphanedDocument } from './submission-tracking/recover';
 import {
 	RecoveryHolder,
@@ -66,6 +83,18 @@ const RESUBMIT_LABELS: Record<SubmissionState, string> = {
 	closed: 'Submit again',
 };
 const REFRESH_LABEL = 'Refresh';
+
+/**
+ * What the Refresh control says while it is working.
+ *
+ * The control that STARTS the work is where the work is reported, rather
+ * than in a separate spinner somewhere else — there is exactly one thing to
+ * look at, and it is the thing you just pressed. It covers all three lists,
+ * because one press refreshes all three and the slowest of them (discovery,
+ * which reads a file per candidate) is the one an author would otherwise sit
+ * through with no sign anything was happening.
+ */
+const CHECKING_LABEL = 'Checking…';
 const DOCUMENTS_HEADING = 'Your documents';
 const NO_DOCUMENTS_MESSAGE = 'Nothing submitted yet. Documents you submit will be listed here.';
 
@@ -109,6 +138,76 @@ const RECOVERABLE_DOCUMENTS_HEADING = 'Documents you can recover';
  */
 const RECOVERY_UNAVAILABLE_MESSAGE = "This document's content can no longer be found automatically.";
 
+/**
+ * The per-ROW form of the message above, and the reason there are two.
+ *
+ * A vault with six unrecoverable records rendered that whole sentence six
+ * times, which is most of the section's height saying one thing — and, until
+ * 2026-09-20, saying it clipped, because the row's state span does not wrap.
+ * The row now carries a short marker and the section carries the explanation
+ * once, which is the same information in a fraction of the space.
+ */
+const RECOVERY_UNAVAILABLE_LABEL = 'Not available';
+
+/**
+ * The empty states for the two REMOTE-BACKED lists, which are present
+ * whenever the panel is (2026-09-20).
+ *
+ * These sections used to vanish when empty, on the reasoning that an
+ * empty-state message would compete with the main list for attention. That
+ * traded one ambiguity for another and picked the worse one: an ABSENT
+ * section is indistinguishable between "nothing to recover", "not asked yet"
+ * and "the check failed", and the first is the only one of the three that
+ * needs nothing from the author. This plugin refuses to let a truncated
+ * listing read as complete or a failed read as absence; letting an unasked
+ * question read as an empty answer was the same mistake on the surface the
+ * author actually looks at.
+ *
+ * "Other documents" keeps the old behaviour deliberately, and the difference
+ * is principled rather than an inconsistency: it partitions documents ALREADY
+ * IN THE VAULT, so its emptiness is a local fact that is never in doubt.
+ * There is no unasked question for it to be confused with.
+ */
+const NO_RECOVERABLE_MESSAGE = 'Nothing to recover.';
+const NO_DISCOVERABLE_MESSAGE = 'Nothing to import.';
+
+/** Before the first refresh has answered — distinct from both of the above. */
+const NOT_CHECKED_MESSAGE = 'Not checked yet.';
+
+/**
+ * Shown beside a section's heading when its last check failed.
+ *
+ * A collapsed section shows its heading and nothing else, so without this the
+ * three empty cases would become indistinguishable again the moment anyone
+ * collapsed one — which is the distinction the messages above exist to draw.
+ * A resolved section shows its count instead; a running one shows nothing,
+ * because the Refresh control already reads "Checking…".
+ */
+const SECTION_FAILED_SUFFIX = '(check failed)';
+
+/** Keys for the two sections whose collapsed state the view remembers. */
+const RECOVERY_SECTION_KEY = 'recover';
+const DISCOVERY_SECTION_KEY = 'discover';
+
+/** The outcome kinds a section heading distinguishes. */
+type RefreshOutcomeKind = 'never' | 'refreshing' | 'succeeded' | 'failed';
+
+/**
+ * What a section's heading says beside its title, or null for nothing.
+ *
+ * A COUNT ONLY WHEN ONE WAS ESTABLISHED, zero included — zero is an answer
+ * the remote gave. A check that has not run, or is running, shows nothing
+ * rather than a "(0)" nobody established; the Refresh control already reads
+ * "Checking…" for the second of those.
+ */
+function sectionSuffix(outcome: RefreshOutcomeKind, count: number): string | null {
+	if (outcome === 'failed') {
+		return SECTION_FAILED_SUFFIX;
+	}
+
+	return outcome === 'succeeded' ? `(${count})` : null;
+}
+
 const RECOVERY_REFRESH_FAILED_MESSAGE =
 	'Could not check which documents can be recovered just now. Try again later.';
 
@@ -118,6 +217,71 @@ function recoveryPermissionMessage(detail: string | undefined): string {
 		`Your access token doesn't have permission to check which documents can be recovered${missing}. ` +
 		'Ask your admin to add it.'
 	);
+}
+
+/**
+ * add-discover-and-import: the third list, for a document the remote holds
+ * that this vault has no note for. Absent entirely rather than shown empty,
+ * like the two conditional sections above it — the common case for a vault
+ * that is already current is nothing to import, and a standing empty-state
+ * message for it would be one more thing competing with the list the author
+ * actually checks.
+ */
+const DISCOVERABLE_DOCUMENTS_HEADING = 'Documents you can import';
+const DISCOVERABLE_DOCUMENTS_DESCRIPTION = 'Documents on the platform that this vault has no copy of.';
+
+/**
+ * Shown when the listing this section was built from hit its cap. Says
+ * plainly that the list is partial rather than letting a partial list read
+ * as everything available — a document missing from a truncated listing is
+ * indistinguishable from one that does not exist (design.md decision 7).
+ */
+const DISCOVERY_INCOMPLETE_MESSAGE =
+	'There are more documents than could be listed at once, so this list is incomplete.';
+
+const DISCOVERY_REFRESH_FAILED_MESSAGE =
+	'Could not check which documents are available to import just now. Try again later.';
+
+function discoveryPermissionMessage(detail: string | undefined): string {
+	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
+	return (
+		`Your access token doesn't have permission to list the project's documents${missing}. ` +
+		'Ask your admin to add it.'
+	);
+}
+
+/**
+ * One line per outcome, so a batch reports what happened to EVERY document
+ * rather than only to the last one — the refusals are the whole reason the
+ * batch continues past them (tasks.md 5.4).
+ *
+ * A refusal with no reason is the authoring gate having already said what to
+ * do next; repeating it once per document would bury its own advice.
+ */
+function importBatchMessage(imported: number, refused: number, incomplete: readonly string[]): string {
+	const lines = [`Imported ${imported} ${imported === 1 ? 'document' : 'documents'}.`];
+
+	// A COUNT, and the reasons on the rows themselves. The first real batch
+	// over the corpus refused eight documents for three different reasons, and
+	// putting all eight in here produced a notice that covered the panel it
+	// was describing (`docs/ce-verification.md` §E6). Each refused row now
+	// carries its own reason, which is where the author is already looking.
+	if (refused > 0) {
+		lines.push(
+			`${refused} could not be imported — each one below says why.`
+		);
+	}
+
+	// Attachments are the exception and stay here: those documents DID import,
+	// so they leave the list and have no row left to carry the news.
+	for (const path of incomplete) {
+		lines.push(path);
+	}
+	if (incomplete.length > 0) {
+		lines.push('Some images did not come with the documents above.');
+	}
+
+	return lines.join('\n');
 }
 
 function resetPermissionMessage(detail: string | undefined): string {
@@ -191,6 +355,11 @@ const PANEL_FAILURE_MESSAGES: Record<FailureKind, string> = {
 	// which only reads, and content-changed is produced solely by a refused
 	// write. Present for exhaustiveness only.
 	'content-changed': 'Someone else changed this document. Open it in GitLab to see their changes.',
+	// REACHABLE here, unlike the two above: every list the panel shows needs a
+	// ref to read from, so a project with no commits fails all of them at once
+	// — and "try again later" would be useless advice for a state that does
+	// not change on its own.
+	'empty-repository': EMPTY_REPOSITORY_MESSAGE,
 	'unexpected': 'The connection check did not succeed. Check your details in settings and try again.',
 };
 
@@ -206,6 +375,19 @@ class DocsPublisherView extends ItemView {
 	private readonly recoverable: RecoveryHolder;
 	private readonly recoverDocument: (entry: Extract<OrphanedDocument, { recoverable: true }>) => void;
 	private readonly resetDocument: (file: TFile, target: ResettableDocument) => void;
+	private readonly discoverable: DiscoveryHolder;
+	private readonly importDocument: (entry: DiscoverableDocument) => void;
+	private readonly importAllDocuments: () => void;
+	/**
+	 * Which collapsible sections the author has collapsed, by key.
+	 *
+	 * On the VIEW and nowhere else, which makes it last the session and no
+	 * longer. It cannot live in the DOM — `render` empties `contentEl` and
+	 * rebuilds it on every note switch — and it deliberately does not go to
+	 * `data.json`, which is documented as a cache of what the remote said
+	 * rather than a place for this surface's preferences.
+	 */
+	private readonly collapsed = new Set<string>();
 	// The pending `setTimeout` id for a scheduled-but-not-yet-run render, or
 	// null when none is pending. See `scheduleRender`.
 	private renderTimer: number | null = null;
@@ -222,7 +404,10 @@ class DocsPublisherView extends ItemView {
 		refreshStatuses: () => void,
 		recoverable: RecoveryHolder,
 		recoverDocument: (entry: Extract<OrphanedDocument, { recoverable: true }>) => void,
-		resetDocument: (file: TFile, target: ResettableDocument) => void
+		resetDocument: (file: TFile, target: ResettableDocument) => void,
+		discoverable: DiscoveryHolder,
+		importDocument: (entry: DiscoverableDocument) => void,
+		importAllDocuments: () => void
 	) {
 		super(leaf);
 		this.state = state;
@@ -243,6 +428,9 @@ class DocsPublisherView extends ItemView {
 		this.recoverable = recoverable;
 		this.recoverDocument = recoverDocument;
 		this.resetDocument = resetDocument;
+		this.discoverable = discoverable;
+		this.importDocument = importDocument;
+		this.importAllDocuments = importAllDocuments;
 	}
 
 	getViewType(): string {
@@ -309,6 +497,15 @@ class DocsPublisherView extends ItemView {
 		// list's own cache (add-document-recovery).
 		this.register(
 			this.recoverable.onChange(() => {
+				this.scheduleRender();
+			})
+		);
+
+		// And again for the discoverable set (add-discover-and-import). Same
+		// rule as the two above: this subscription redraws from a cache and
+		// never reaches the remote.
+		this.register(
+			this.discoverable.onChange(() => {
 				this.scheduleRender();
 			})
 		);
@@ -419,6 +616,10 @@ class DocsPublisherView extends ItemView {
 				// Recovering creates a new local note exactly as "New Document"
 				// does, so it is gated the same way and shown only here.
 				this.renderRecoverySection(container);
+				// Importing does too, so the same applies — and it sits last
+				// because it is about documents the author has not worked on,
+				// below both lists of documents they have.
+				this.renderDiscoverySection(container);
 				return;
 			}
 
@@ -537,16 +738,83 @@ class DocsPublisherView extends ItemView {
 	 * control below and the view opening. The split costs no request either:
 	 * it is a partition of data this method already holds.
 	 */
+	/**
+	 * Whether any of the panel's three remote-backed lists is mid-refresh.
+	 *
+	 * All three are filled by one press and one panel-open, so "is the plugin
+	 * working right now" is a question about the set rather than about any one
+	 * of them.
+	 */
+	private isChecking(): boolean {
+		return (
+			this.statuses.lastOutcome.kind === 'refreshing' ||
+			this.recoverable.lastOutcome.kind === 'refreshing' ||
+			this.discoverable.lastOutcome.kind === 'refreshing'
+		);
+	}
+
+	/**
+	 * A section heading that collapses what is under it, the way Obsidian's
+	 * own "Linked mentions" / "Unlinked mentions" headings do.
+	 *
+	 * Returns whether the body should be built at all, so a collapsed section
+	 * costs its heading and nothing else — which is the point, on the two
+	 * sections that grow.
+	 *
+	 * The chevron and the heading are the click target, and the rest of the
+	 * header row is NOT: "Import all" sits there too, and pressing it must not
+	 * collapse the section out from under the press.
+	 */
+	private renderCollapsibleHeader(
+		header: HTMLElement,
+		params: { key: string; text: string; count: number; outcome: RefreshOutcomeKind }
+	): boolean {
+		const expanded = !this.collapsed.has(params.key);
+
+		// NO CHEVRON, deliberately. The headings this is modelled on show none
+		// either, and an arrow here indented the title out of line with the
+		// panel's other headings for the sake of an affordance the pointer
+		// cursor and the hover colour already carry. Which state a section is
+		// in stays readable without one: the suffix reports the count or the
+		// failure, and a heading with a count and nothing under it is folded.
+		const toggle = header.createDiv({ cls: 'docs-publisher-section-toggle' });
+		toggle.createEl('h4', { text: params.text });
+
+		const suffix = sectionSuffix(params.outcome, params.count);
+		if (suffix !== null) {
+			toggle.createSpan({ cls: 'docs-publisher-section-count', text: suffix });
+		}
+
+		toggle.addEventListener('click', () => {
+			if (expanded) {
+				this.collapsed.add(params.key);
+			} else {
+				this.collapsed.delete(params.key);
+			}
+			this.render();
+		});
+
+		return expanded;
+	}
+
 	private renderDocumentList(container: HTMLElement): void {
 		const section = container.createDiv({ cls: 'docs-publisher-documents' });
 		const header = section.createDiv({ cls: 'docs-publisher-documents-header' });
 		header.createEl('h4', { text: DOCUMENTS_HEADING });
 
 		const outcome = this.statuses.lastOutcome;
-		const refresh = new ButtonComponent(header).setButtonText(REFRESH_LABEL).onClick(() => {
-			this.refreshStatuses();
-		});
-		if (outcome.kind === 'refreshing') {
+		// One press refreshes all three lists, so the control reports all
+		// three. Reading only this list's outcome left the button idle and
+		// enabled while discovery — much the slowest, a file read per
+		// candidate — was still running, which is the state an author reads as
+		// "nothing is happening".
+		const checking = this.isChecking();
+		const refresh = new ButtonComponent(header)
+			.setButtonText(checking ? CHECKING_LABEL : REFRESH_LABEL)
+			.onClick(() => {
+				this.refreshStatuses();
+			});
+		if (checking) {
 			refresh.setDisabled(true);
 		}
 
@@ -693,20 +961,42 @@ class DocsPublisherView extends ItemView {
 	 * matching note in the vault, add-document-recovery. Renders from the
 	 * holder's cache alone, filled by the same refresh this view already
 	 * triggers for the main list, so this costs no request of its own on a
-	 * normal render pass (tasks.md 4.3). Absent entirely when there is
-	 * nothing to recover — plugin-shell spec's "Nothing to recover" scenario
-	 * — rather than shown with a competing empty-state message.
+	 * normal render pass (tasks.md 4.3). Absent when there is nothing to
+	 * recover — plugin-shell spec's "Nothing to recover" scenario — rather
+	 * than shown with a competing empty-state message.
+	 *
+	 * ALWAYS PRESENT, empty or not (2026-09-20) — see `NO_RECOVERABLE_MESSAGE`
+	 * for why the section stopped vanishing. It also used to return on an
+	 * empty list BEFORE reaching the failure block below, which made both
+	 * messages there unreachable in the case that matters most: a first
+	 * refresh that failed has nothing previously resolved, so the author was
+	 * told nothing at all.
 	 */
 	private renderRecoverySection(container: HTMLElement): void {
 		const documents = this.recoverable.current;
-		if (documents.length === 0) {
+		const outcome = this.recoverable.lastOutcome;
+
+		const section = container.createDiv({ cls: 'docs-publisher-documents' });
+		const header = section.createDiv({ cls: 'docs-publisher-documents-header' });
+		const expanded = this.renderCollapsibleHeader(header, {
+			key: RECOVERY_SECTION_KEY,
+			text: RECOVERABLE_DOCUMENTS_HEADING,
+			count: documents.length,
+			outcome: outcome.kind,
+		});
+		if (!expanded) {
 			return;
 		}
 
-		const section = container.createDiv({ cls: 'docs-publisher-documents' });
-		section.createEl('h4', { text: RECOVERABLE_DOCUMENTS_HEADING });
+		// Said ONCE, for however many rows are marked "Not available", instead
+		// of once per row.
+		if (documents.some((entry) => !entry.recoverable)) {
+			section.createEl('p', {
+				text: RECOVERY_UNAVAILABLE_MESSAGE,
+				cls: 'setting-item-description',
+			});
+		}
 
-		const outcome = this.recoverable.lastOutcome;
 		if (outcome.kind === 'failed') {
 			section.createEl('p', {
 				text:
@@ -715,6 +1005,18 @@ class DocsPublisherView extends ItemView {
 						: RECOVERY_REFRESH_FAILED_MESSAGE,
 				cls: 'setting-item-description',
 			});
+		}
+
+		if (documents.length === 0) {
+			// The three empty cases say three different things. A failure has
+			// already spoken for itself just above; the other two have not.
+			if (outcome.kind !== 'failed') {
+				section.createEl('p', {
+					text: outcome.kind === 'succeeded' ? NO_RECOVERABLE_MESSAGE : NOT_CHECKED_MESSAGE,
+					cls: 'setting-item-description',
+				});
+			}
+			return;
 		}
 
 		const list = section.createEl('ul', { cls: 'docs-publisher-document-list' });
@@ -735,7 +1037,7 @@ class DocsPublisherView extends ItemView {
 		if (!entry.recoverable) {
 			row.createSpan({
 				cls: 'docs-publisher-document-state',
-				text: RECOVERY_UNAVAILABLE_MESSAGE,
+				text: RECOVERY_UNAVAILABLE_LABEL,
 			});
 			const link = row.createEl('a', {
 				cls: 'docs-publisher-document-link',
@@ -750,6 +1052,134 @@ class DocsPublisherView extends ItemView {
 		new ButtonComponent(row).setButtonText(RECOVER_LABEL).onClick(() => {
 			this.recoverDocument(entry);
 		});
+	}
+
+	/**
+	 * "Documents you can import" — every markdown document the remote's
+	 * default branch holds that this vault has no note at that path for
+	 * (add-discover-and-import). Renders from the holder's cache alone,
+	 * filled by the same refresh this view already triggers for the two lists
+	 * above it, so a render pass costs no request (tasks.md 5.6).
+	 *
+	 * Absent when there is nothing to import — the plugin-shell spec's "the
+	 * vault already has everything" scenario — rather than shown with a
+	 * competing empty-state message.
+	 *
+	 * ALWAYS PRESENT, empty or not (2026-09-20) — see
+	 * `NO_DISCOVERABLE_MESSAGE`. It also used to return on an empty list
+	 * before reaching the failure block, and the comment here used to claim
+	 * that was harmless because "a refresh that failed with nothing previously
+	 * resolved says so through the main list's own failure line". THAT WAS
+	 * WRONG, and wrong in the way that matters: the main list reads MERGE
+	 * REQUESTS and this reads the REPOSITORY TREE, which are different
+	 * permissions on a fine-grained token. A token granted `Merge Request:
+	 * Read` and not repository read makes the main list succeed and this one
+	 * fail — silently, on every refresh, with the author never told which
+	 * permission to ask for.
+	 */
+	private renderDiscoverySection(container: HTMLElement): void {
+		const documents = this.discoverable.current;
+		const outcome = this.discoverable.lastOutcome;
+
+		const section = container.createDiv({
+			cls: 'docs-publisher-documents docs-publisher-documents-discover',
+		});
+		const header = section.createDiv({ cls: 'docs-publisher-documents-header' });
+		const expanded = this.renderCollapsibleHeader(header, {
+			key: DISCOVERY_SECTION_KEY,
+			text: DISCOVERABLE_DOCUMENTS_HEADING,
+			count: documents.length,
+			outcome: outcome.kind,
+		});
+
+		// No "Import all" over nothing, and no description of a list that is
+		// not there — the section is carrying a failure, not an offer. Nor
+		// either while collapsed: the heading is the whole section then, and
+		// an action beside it would act on a list nobody can see.
+		//
+		// BELOW the heading rather than beside it, unlike Refresh on "Your
+		// documents" above. That heading is two short words and leaves room;
+		// this one is four and wrapped around the button, breaking the title
+		// across two lines to make space for it. The button sits under the
+		// description instead, directly above the list it acts on.
+		if (expanded && documents.length > 0) {
+			section.createEl('p', {
+				text: DISCOVERABLE_DOCUMENTS_DESCRIPTION,
+				cls: 'setting-item-description',
+			});
+			const actions = section.createDiv({ cls: 'docs-publisher-section-actions' });
+			new ButtonComponent(actions).setButtonText(IMPORT_ALL_LABEL).onClick(() => {
+				this.importAllDocuments();
+			});
+		}
+
+		if (!expanded) {
+			return;
+		}
+
+		if (outcome.kind === 'failed') {
+			section.createEl('p', {
+				text:
+					outcome.failure === 'insufficient-permission'
+						? discoveryPermissionMessage(outcome.detail)
+						: DISCOVERY_REFRESH_FAILED_MESSAGE,
+				cls: 'setting-item-description',
+			});
+		}
+
+		// Said plainly, and said next to the list it qualifies rather than in
+		// a notice that has already gone by the time the author reads the rows.
+		if (this.discoverable.incomplete) {
+			section.createEl('p', {
+				text: DISCOVERY_INCOMPLETE_MESSAGE,
+				cls: 'setting-item-description',
+			});
+		}
+
+		if (documents.length === 0) {
+			if (outcome.kind !== 'failed') {
+				section.createEl('p', {
+					text: outcome.kind === 'succeeded' ? NO_DISCOVERABLE_MESSAGE : NOT_CHECKED_MESSAGE,
+					cls: 'setting-item-description',
+				});
+			}
+			return;
+		}
+
+		const list = section.createEl('ul', { cls: 'docs-publisher-document-list' });
+		for (const entry of documents) {
+			this.renderDiscoverableRow(list, entry);
+		}
+	}
+
+	/**
+	 * One discoverable document: its REMOTE PATH, and the action that brings
+	 * it in.
+	 *
+	 * The path rather than a filename, unlike every other row on this
+	 * surface, and that is what the row is for: the author is choosing
+	 * between documents they have never seen, filed in a hierarchy they may
+	 * not know, where two folders commonly hold similarly-named documents.
+	 * The path is also exactly where the note will land.
+	 */
+	private renderDiscoverableRow(list: HTMLElement, entry: DiscoverableDocument): void {
+		const row = list.createEl('li', { cls: 'docs-publisher-document' });
+		row.createSpan({ cls: 'docs-publisher-document-name', text: entry.path });
+
+		new ButtonComponent(row).setButtonText(IMPORT_LABEL).onClick(() => {
+			this.importDocument(entry);
+		});
+
+		// Beneath the row it belongs to, rather than in a notice that covers
+		// the list. A refused document stays here, so its reason can stay with
+		// it — and a batch refusing several for several reasons stays readable.
+		const refusal = this.discoverable.refusalFor(entry.path);
+		if (refusal !== null) {
+			row.createEl('p', {
+				text: refusal,
+				cls: 'setting-item-description docs-publisher-document-refusal',
+			});
+		}
 	}
 
 	/**
@@ -805,12 +1235,44 @@ class DocsPublisherPlugin extends Plugin {
 	// for the same reason.
 	readonly recoverableDocuments = new RecoveryHolder();
 
+	// The last-resolved set of documents the remote has and this vault does
+	// not (add-discover-and-import). Memory only, like the two above.
+	readonly discoverableDocuments = new DiscoveryHolder();
+
 	private viewActivating = false;
 
 	async onload(): Promise<void> {
 		console.log('Loading Docs Publisher plugin');
 
 		await this.submissions.load();
+
+		// Editing any connection detail discards the verified result, and the
+		// three resolved lists have to go with it: they describe the project
+		// that WAS configured, and nothing about them survives pointing the
+		// plugin somewhere else.
+		//
+		// The settings tab already refuses to report a verified person
+		// alongside details they were not verified against; this is the same
+		// rule applied to the thing that actually carries actions. Without it,
+		// changing the project id left "Documents you can recover" listing the
+		// old project's documents with live Recover buttons beside them, while
+		// both checks against the new one reported failure — observed
+		// 2026-09-20.
+		//
+		// Only on `unverified`, which is precisely the details-were-edited
+		// signal. A FAILED check keeps what was last known on purpose: the
+		// project has not changed, and a stale answer beats an empty list.
+		this.register(
+			this.connectionState.onChange((state) => {
+				if (state.kind !== 'unverified') {
+					return;
+				}
+
+				this.documentStatuses.clear();
+				this.recoverableDocuments.clear();
+				this.discoverableDocuments.clear();
+			})
+		);
 
 		// Register the custom view
 		this.registerView(
@@ -838,6 +1300,13 @@ class DocsPublisherPlugin extends Plugin {
 					},
 					(file, target) => {
 						this.resetDocument(file, target);
+					},
+					this.discoverableDocuments,
+					(entry) => {
+						this.importDocument(entry);
+					},
+					() => {
+						this.importAllDocuments();
 					}
 				)
 		);
@@ -935,6 +1404,151 @@ class DocsPublisherPlugin extends Plugin {
 			this.submissions,
 			this.recoverableDocuments
 		);
+		// And the third question, on the same two triggers and kept separate
+		// for the same reason: "what does the remote have that this vault has
+		// no trace of" is asked of documents neither of the other two knows
+		// about (add-discover-and-import).
+		void refreshRemoteDiscoverableDocuments(
+			this.app,
+			this.connection,
+			this.connectionState.current,
+			this.submissions,
+			this.discoverableDocuments
+		);
+	}
+
+	/**
+	 * The one path to importing a discovered document. Writes the note from
+	 * the content the refresh already read — no second request for bytes
+	 * already in hand — and drops the row from the holder on success rather
+	 * than waiting for the next refresh, since the note now exists locally.
+	 */
+	private importDocument(entry: DiscoverableDocument): void {
+		void (async () => {
+			const outcome = await this.runImport(entry);
+			if (!outcome.ok) {
+				// Onto the row, not into a notice: the document is still in the
+				// list, so the reason belongs beside it where it stays put. A
+				// refusal with no reason is the authoring gate, which has
+				// already said what to do next.
+				this.discoverableDocuments.recordRefusals(
+					outcome.reason === '' ? new Map() : new Map([[outcome.path, outcome.reason]])
+				);
+				return;
+			}
+
+			// Said only when something is missing. A document whose images all
+			// arrived says nothing, which is what keeps this worth reading.
+			const attachments = attachmentReportMessage(outcome.attachments);
+			if (attachments !== null) {
+				new Notice(attachments);
+			}
+		})();
+	}
+
+	/**
+	 * "Import all", which CONTINUES PAST A REFUSAL and reports every outcome
+	 * (tasks.md 5.4). One duplicate `doc_id` must not block importing thirty
+	 * unrelated documents, and the author needs to know which one it was.
+	 *
+	 * Gated once here rather than per document: the gate is a property of the
+	 * connection, not of any one document, so a batch that cannot run at all
+	 * should say so once. `importDocument` gates again regardless, which is
+	 * the actual enforcement.
+	 *
+	 * Sequential rather than concurrent. Each import is a vault write, the
+	 * refusals are decided against the vault's own current contents, and two
+	 * imports racing on the same folder creation is the kind of bug that only
+	 * appears on somebody else's machine.
+	 */
+	private importAllDocuments(): void {
+		if (requireAuthoringGate(this.connection, this.connectionState.current) === null) {
+			return;
+		}
+
+		void (async () => {
+			// Copied first: each success removes a row from the holder, and
+			// iterating a list while the thing it comes from is being edited
+			// is how a batch silently skips half its work.
+			const documents = [...this.discoverableDocuments.current];
+			const refusals = new Map<string, string>();
+			const incomplete: string[] = [];
+			let imported = 0;
+
+			for (const entry of documents) {
+				const outcome = await this.runImport(entry);
+				if (!outcome.ok) {
+					if (outcome.reason !== '') {
+						refusals.set(outcome.path, outcome.reason);
+					}
+					continue;
+				}
+
+				imported++;
+				// An import that succeeded still has something to say when its
+				// images did not all come with it. It has left the list by now,
+				// so unlike a refusal it has no row left to say it on.
+				if (attachmentReportMessage(outcome.attachments) !== null) {
+					incomplete.push(outcome.path);
+				}
+			}
+
+			this.discoverableDocuments.recordRefusals(refusals);
+
+			// ORDINARY DURATION, deliberately, and this used to be 0 — a notice
+			// that never went away until clicked. That was defensible while the
+			// notice CARRIED the refusal reasons and was the only place to read
+			// them; it stopped being so the moment those moved onto the rows,
+			// where they stay put and outlive any notice. What is left here is
+			// a count and a heads-up, neither of which the author acts on from
+			// the notice itself, so it behaves like every other notice this
+			// plugin shows.
+			//
+			// The exception that proves the rule is `offerRecovery` in
+			// `submit-document.ts`, which is still 0: it holds a BUTTON, and
+			// timing out would take an action away mid-reach.
+			new Notice(importBatchMessage(imported, refusals.size, incomplete));
+
+			// The documents that arrived without all their images have left the
+			// list, so no row is left to carry this and the notice is the only
+			// surface it had. Logged so it survives the notice rather than
+			// being the one thing an author cannot look up again.
+			if (incomplete.length > 0) {
+				console.error(
+					`Docs Publisher: imported with images missing — ${incomplete.join(', ')}`
+				);
+			}
+		})();
+	}
+
+	/**
+	 * One import, plus the bookkeeping both entry points share. Kept in one
+	 * place so a single import and a batch cannot drift into doing different
+	 * things — the same reason every other action here has one path.
+	 */
+	private async runImport(entry: DiscoverableDocument): Promise<ImportOutcome> {
+		const ref = this.discoverableDocuments.ref;
+		if (ref === null) {
+			// Unreachable from the panel — a row only exists because a
+			// resolution succeeded, and a success always records its ref. Here
+			// because the alternative is defaulting to a ref nobody read, and
+			// fetching a document's images from the wrong point in history is
+			// the kind of wrong that looks right.
+			return { ok: false, path: entry.path, reason: IMPORT_FAILED_MESSAGE };
+		}
+
+		const outcome = await importDocumentWrite(
+			this.app,
+			this.connection,
+			this.connectionState.current,
+			entry,
+			{ ref, remotePaths: this.discoverableDocuments.paths }
+		);
+		if (outcome.ok) {
+			this.discoverableDocuments.remove(outcome.path);
+		}
+
+		return outcome;
 	}
 
 	/**
@@ -977,7 +1591,11 @@ class DocsPublisherPlugin extends Plugin {
 				this.connection,
 				this.connectionState.current,
 				entry.path,
-				fetched.content
+				fetched.content,
+				// The ref the content actually came from, so the document's
+				// images are fetched from the same point in history as its
+				// text (milestone 9a).
+				fetched.ref
 			);
 			if (!recovered) {
 				return;

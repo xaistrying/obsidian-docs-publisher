@@ -72,6 +72,26 @@ class DocumentStatusHolder {
 		this.notify();
 	}
 
+	/**
+	 * Throws the resolved set away and returns to never-checked.
+	 *
+	 * For ONE caller and one reason: the connection details changed. A failed
+	 * refresh deliberately keeps what was last known, because the author is
+	 * better off with a stale answer about the same project than with an empty
+	 * list — but that reasoning ends the moment the project itself changes.
+	 * What is held then does not describe the project the panel is now
+	 * pointing at, and keeping it shows documents from somewhere else with
+	 * live actions beside them (observed 2026-09-20 after a project id edit).
+	 *
+	 * Back to `never` rather than to an empty success, so the panel says "not
+	 * checked yet" rather than asserting an emptiness nobody established.
+	 */
+	clear(): void {
+		this.statuses = new Map();
+		this.outcome = { kind: 'never' };
+		this.notify();
+	}
+
 	/** Subscribes, and returns the function that unsubscribes again. */
 	onChange(listener: Listener): () => void {
 		this.listeners.add(listener);

@@ -40,6 +40,11 @@ so the facts are looked up once, not re-derived or guessed per session.
   every resolved document state, the hardcoded commit-action bug that blocks
   reviving a published document, and the state-fork milestones 6/7/7a share.
   Read before designing any resubmission path.
+- `docs/document-naming.md` — why a document's filename must be unique across
+  the whole repository, the git-ref rules a name must satisfy, and the
+  2026-09-15 import incident the rules were written from. Read before
+  changing `doc_id` derivation, the import refusals, or anything that
+  advises an author about naming.
 - `docs/panel-tracking-scope.md` — what Reset needs versus Recover, how
   "Your documents" narrows to active MRs, and what Discover & Import needs,
   including the still-open legacy-content question. Read before touching the

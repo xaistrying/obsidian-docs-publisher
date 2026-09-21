@@ -10,11 +10,12 @@
  * this file calls the methods it visibly calls.
  */
 
-import { arrayBufferToBase64, normalizePath } from 'obsidian';
+import { arrayBufferToBase64, base64ToArrayBuffer, normalizePath } from 'obsidian';
 import type { App } from 'obsidian';
 import type { ClientResult, ConnectionDetails, FileCommitId } from '../git-publishing/gitlab-client';
-import { getFileCommitId } from '../git-publishing/gitlab-client';
+import { getFileBytes, getFileCommitId } from '../git-publishing/gitlab-client';
 import type { VaultEmbedIndex } from './embeds';
+import type { AttachmentSource } from './fetch-attachments';
 import type { SubmissionFileReads } from './submission-files';
 
 /**
@@ -72,4 +73,93 @@ async function readAttachmentBytes(app: App, path: string): Promise<string | nul
 		console.error(`Docs Publisher: could not read ${path} to submit it.`, error);
 		return null;
 	}
+}
+
+/**
+ * The four answers `fetchDocumentAttachments` needs, bound to the ref the
+ * note came from — the read-side counterpart of `submissionFileReads` above,
+ * and bound for the same reason: every file of one document must come from
+ * one point in history.
+ *
+ * `embedsFor` is the SAME read `vaultEmbedIndex` makes. Only the other two
+ * questions differ, which is the whole point — see `fetch-attachments.ts`.
+ */
+export function attachmentSource(app: App, details: ConnectionDetails, ref: string): AttachmentSource {
+	return {
+		embedsFor: (notePath) => app.metadataCache.getCache(notePath)?.embeds ?? [],
+		heldInVault: (path) => app.vault.getAbstractFileByPath(normalizePath(path)) !== null,
+		readRemote: (path) => getFileBytes(details, { path, ref }),
+		write: (path, base64) => writeAttachmentBytes(app, path, base64),
+	};
+}
+
+/**
+ * Writes one attachment's bytes into the vault, creating the folders its
+ * remote path nests under.
+ *
+ * `createBinary`, never `create`: an image written through the text path
+ * arrives corrupted, which is the read-side twin of the encoding rule
+ * `buildSubmissionFiles` follows going the other way.
+ *
+ * False rather than a throw on every failure, because the caller's answer to
+ * all of them is the same — report this one attachment and carry on with the
+ * rest of the document.
+ */
+async function writeAttachmentBytes(app: App, path: string, base64: string): Promise<boolean> {
+	try {
+		const folderPath = path.slice(0, path.lastIndexOf('/'));
+		if (folderPath !== '' && app.vault.getAbstractFileByPath(folderPath) === null) {
+			await app.vault.createFolder(folderPath);
+		}
+
+		await app.vault.createBinary(path, base64ToArrayBuffer(base64));
+		return true;
+	} catch (error) {
+		console.error(`Docs Publisher: could not write ${path} into the vault.`, error);
+		return false;
+	}
+}
+
+/** How long to wait for Obsidian to parse a note before giving up on it. */
+const INDEX_WAIT_MS = 2000;
+
+/**
+ * Waits until Obsidian has parsed the note just written, so its embeds are
+ * in the metadata cache to be read.
+ *
+ * THE ORDERING DEPENDENCY design.md decision 3 names, made explicit: embed
+ * resolution reads what Obsidian recorded for the note, and `vault.create`
+ * resolves when the file is written rather than when it has been parsed.
+ *
+ * Resolves on the cache event for that file, or on the timeout, and then
+ * lets the caller read whatever the cache holds. Both exits are the same
+ * exit deliberately: the timeout is not an error, it is the point at which
+ * waiting longer stops being worth it, and a note whose embeds are not
+ * recorded by then simply resolves to no attachments — the same outcome as a
+ * note with none.
+ */
+export async function awaitNoteIndexed(app: App, notePath: string): Promise<void> {
+	if (app.metadataCache.getCache(notePath) !== null) {
+		return;
+	}
+
+	await new Promise<void>((resolve) => {
+		let settled = false;
+		const finish = (): void => {
+			if (settled) {
+				return;
+			}
+			settled = true;
+			app.metadataCache.offref(reference);
+			window.clearTimeout(timer);
+			resolve();
+		};
+
+		const reference = app.metadataCache.on('changed', (file) => {
+			if (file.path === notePath) {
+				finish();
+			}
+		});
+		const timer = window.setTimeout(finish, INDEX_WAIT_MS);
+	});
 }

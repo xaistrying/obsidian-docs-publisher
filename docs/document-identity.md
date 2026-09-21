@@ -117,9 +117,50 @@ picking one.
   same source branch. The collision rule below already requires the
   plugin to detect this and refuse; that rule now covers a likely case
   rather than a rare one.
+  THEREFORE, STATED AS A RULE ON THE REPOSITORY rather than only as a
+  risk the plugin detects (added 2026-09-15): EVERY DOCUMENT FILENAME
+  MUST BE UNIQUE ACROSS THE WHOLE REPOSITORY, not merely within its
+  folder, because the folder is not part of `doc_id`. This is a
+  correctness requirement, not a style preference — a document whose
+  filename is taken cannot be published at all. Observed breaking on
+  the real corpus: six of eight refused imports were files sharing a
+  basename across folders (`README.md`, `_placeholder.md`). Which one
+  won was decided by path sort order and by nothing else. Full analysis
+  and the rules a conforming repository follows:
+  `docs/document-naming.md`.
+- AMENDED 2026-09-14 (add-discover-and-import): `doc_id` is frozen at
+  the moment a document's identity becomes fixed — FIRST SUBMIT for a
+  document this vault authored, and IMPORT for a document it did not.
+  The rule above is unchanged for every document the plugin creates;
+  this widens it to cover the one it does not.
+  Why the shift-right freedom the bullet above protects does not apply
+  to an imported document: its name and path were already decided, on
+  the remote, by whoever published it, and §4's refuse-to-move already
+  forbids changing them. There is no freedom being taken away, only a
+  snapshot being taken of a value that was never in motion.
+  What it buys, and the reason it is not merely tidy: an imported
+  document with no `doc_id` takes the FIRST-submit path, where
+  `checkTargetPathFree` refuses it — a file does exist at its path on
+  the default branch, by construction, for every imported document
+  (`docs/ce-verification.md` §E3). Freezing the id at import makes the
+  first submit a RESUBMISSION, which does not run that check and reads
+  the commit verb rather than assuming `create`. Import without this
+  produces documents that cannot then be submitted.
+  A document being imported that ALREADY carries a `doc_id` — one this
+  plugin published, read back from the remote — keeps the value it
+  carries. The identity has a birth already; import does not give it a
+  second one.
+  REJECTED: teaching `checkTargetPathFree` to recognise an imported
+  document. It would need a local trace to recognise it BY, which is
+  the tracking this amendment adds anyway — arriving at the same place
+  having also weakened a guard that is currently exactly right.
 - Duplicating a note in Obsidian copies its front matter, so two notes
   can claim the same `doc_id`. The plugin must detect a collision and
   refuse to submit rather than silently commit two files to one branch.
+  EXTENDED 2026-09-14: the same collision is now detected at IMPORT
+  too, before anything is written, naming the note that already holds
+  the id. Detecting it only at submit was far too late for a collision
+  the import itself created.
 
 ## 4. Paths — vault mirroring, refusing to move, reorganization
 

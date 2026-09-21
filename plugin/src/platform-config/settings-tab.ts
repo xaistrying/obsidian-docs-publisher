@@ -1,6 +1,7 @@
 import { App, ButtonComponent, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import type { ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
 import { getCurrentUser, getProjectAccess } from '../git-publishing/gitlab-client';
+import { EMPTY_REPOSITORY_MESSAGE } from './access-messages';
 import { hasConnectionDetails } from './connection';
 import type { ConnectionState, ConnectionStateHolder } from './connection-state';
 
@@ -27,6 +28,10 @@ const FAILURE_MESSAGES: Record<FailureKind, string> = {
 	// above: this check only reads, and content-changed is produced solely by
 	// a refused write. Present for the table's exhaustiveness.
 	'content-changed': 'Someone else changed this document. Open it in GitLab to see their changes.',
+	// Unreachable here too — "Test connection" reads the account and the
+	// project's access level, neither of which needs a branch. Present for
+	// exhaustiveness; the author meets this one at their first submit.
+	'empty-repository': EMPTY_REPOSITORY_MESSAGE,
 	'unexpected': 'The connection check did not succeed. Check the details above and try again.',
 };
 

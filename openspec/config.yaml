@@ -286,30 +286,30 @@ context: |
      "Open in GitLab" link.
      DEEP LINKING: whether to also offer a file-specific blob-view link
      is undecided (`docs/resubmission-lifecycle.md` §6).
-  9. Discover & Import — ADDED. Every remote document the vault has no
-     trace of, unlike 5a's recovery. Unmilestoned until `future-work.md`
-     parked it; revisited now. Import, not sync.
-     SIZING ANSWERED 2026-09-14 (`docs/ce-verification.md` §E2): the real
-     corpus carries `title`/`owner`/`last_reviewed` and lacks
-     `doc_id`/`category`/`lifecycle` — a SUBSET of the contract, not a
-     conflicting convention, and exactly what documents this plugin never
-     created would lack. `doc_id` derives from the filename at first
-     submit as designed. So: smaller than feared, not a backfill engine.
-     THE REAL BLOCKER is not front matter (§E3): an imported document has
-     no `doc_id`, so its first submit takes the first-submit path, where
-     `checkTargetPathFree` refuses it — a file DOES exist at its path on
-     the default branch, by construction. Import currently produces
-     unsubmittable documents. Resolve that in this milestone's design
-     before anything else. `docs/panel-tracking-scope.md`.
-  9a. Attachment sync, read side — ADDED 2026-09-13 (add-attachment-sync
-     deferred it explicitly rather than omitting it). 4a pushes
-     attachments UP; nothing pulls them down. Recover restores a note's
-     text alone, so a recovered document still has broken embeds, and
-     milestone 9's Import inherits the same gap. Suffixed `9a` on the
-     usual convention: it extends 5a's Recover and 9's Import rather than
-     sitting between two milestones, so nothing renumbers. Blocked on
-     nothing — it is deferred work, not dropped work, which is why it is
-     numbered here rather than parked below.
+  9. Discover & Import — DONE (2026-09-14, add-discover-and-import).
+     Import, never sync: author-triggered, one document or an explicit
+     "import all". A third panel section lists remote markdown the vault
+     has no note at that path for, minus files carrying NO front matter
+     block — the whole exclusion rule, and §E2 is why it is neither a
+     filename denylist nor the full contract. Truncation is reported.
+     THREE RULES NOT TO RE-BREAK:
+       - `doc_id` IS FROZEN AT IMPORT. Without it the first submit takes
+         the first-submit path and `checkTargetPathFree` refuses, by
+         construction, every time (§E3). WIDENS
+         `docs/document-identity.md` §3, amended to match.
+       - The remote path, never milestone 3a's default directory.
+       - Both refusals — duplicate `doc_id` anywhere in the vault, and an
+         occupied path — run before anything is written.
+  9a. Attachment sync, read side — DONE (2026-09-14, same change). An
+     imported OR recovered document brings its images down, each at its
+     own remote path; one the vault already holds there is left alone.
+     Recovery had this gap from the day it shipped.
+     ONE RULE NOT TO RE-BREAK: resolution is `resolveEmbeddedAttachments`
+     asked of an index backed by the REPOSITORY LISTING, not the vault.
+     The vault-backed adapter answers only for files already present, so
+     it resolves nothing for exactly the documents that need it. A
+     wikilink with several candidates is reported unplaceable, never
+     guessed — 4a's ban on a second shortest-path rule still binds.
   Not yet milestoned, and not accidentally: multi-platform support (out of
   scope per git-publishing's capability boundary, not merely deferred),
   offline queueing (explicit non-goal), note-in-note transclusion —
@@ -550,6 +550,18 @@ context: |
       - by hand, by the author, at any time thereafter, with the plugin
         never writing again: `title`, `category`, `lifecycle`,
         `last_reviewed`, `owner`.
+    CLARIFIED 2026-09-14 (milestone 9): "first submit" means THIS VAULT'S
+    first submit of the document, not "the note has no `doc_id`". An
+    imported document carries `doc_id` frozen at import and has never
+    been through the moment `title`/`category` are written, so its next
+    submit collects and writes them — performing the contract, not
+    repeating it. `category`'s presence is what tells the two apart: the
+    plugin alone writes it (§E2 found it absent from all 34 real
+    documents), so a note carrying `doc_id` but no `category` has never
+    submitted from here. Without this, freezing `doc_id` at import only
+    MOVES §E3's refusal from the collision check to the front-matter one
+    and an imported document is still unsubmittable — observed in the
+    running plugin, §E6.
     `title` IS NOT THE FILENAME, and the two are deliberately allowed to
     differ. The filename is the control ID —
     `SBT-KE-001_EG95-mTLS-Socket-Reopen-Error200.md`; `title` is what a

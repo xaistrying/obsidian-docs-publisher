@@ -151,6 +151,44 @@ regardless of state). If it were removed because that list now means
 2. **Disappear from both surfaces** until Discover ships, a real gap for
    anyone who deletes a published note's local copy in the meantime.
 
+OBSERVED 2026-09-20, once Discover shipped and both lists ran together
+against a vault with orphaned records: **the same document appears in both
+lists, and they contradict each other.** `test-007` sits in "Documents you
+can recover" marked "Not available", while `test/test-007.md` sits in
+"Documents you can import" with a working Import button — the same document,
+which one list says cannot be found and the other offers to fetch.
+
+The cause is that recovery's fallback is WEAKER than discovery's. `resolveOne`
+resolves a record with no stored path by looking for an OPEN merge request;
+when the review is merged or closed there is nothing to read a path from, so
+it answers unrecoverable — even though the document is sitting on the default
+branch, which is exactly where discovery's tree read finds it.
+
+So option (1) below is no longer only tidier, it is a CORRECTNESS fix: the
+two lists gave an author two different answers about one document.
+
+RESOLVED 2026-09-20, the same day, in favour of the STRONGER answer:
+
+- Recovery gained a THIRD fallback. A record with no stored path and no open
+  merge request is now matched against the default branch's own file listing
+  by derived `doc_id` — the same derivation Import uses, so the two cannot
+  disagree about which remote file IS a given document. Exactly one match is
+  an answer; several (the `README.md` case in `docs/document-naming.md`)
+  declines rather than picking. The listing is read lazily and at most once
+  per resolution, so a store whose records all carry their own path — every
+  record written since add-document-recovery — still costs no request.
+- Discover cedes those documents. A remote document whose derived `doc_id`
+  belongs to an ORPHANED record is recovery's, and is no longer listed as
+  importable.
+
+Deliberately the orphaned set and not every stored `doc_id`: a record whose
+note IS in the vault at another path must leave the remote document
+discoverable, which is submission-tracking's "a document the vault holds at a
+different path" scenario, with the import-time duplicate check reporting the
+collision. The two resolutions compute that set from the same two inputs
+rather than one waiting on the other's result, so the one-file-per-direction
+split stands.
+
 DECIDED FOR 5b, 2026-09-13: "Documents you can recover" was NOT narrowed.
 It still lists orphaned records in every state, exactly as it did. Option 2
 is a live gap with no ship date attached to its fix, and 5b had no reason
@@ -162,6 +200,11 @@ existing logic already knows how to answer that distinction. Flagged for
 whoever designs 9.
 
 ## Milestone 9 — Discover & Import
+
+SHIPPED 2026-09-14 (add-discover-and-import), with one half still open —
+see "What shipped" at the end of this section. Everything between here and
+there is the scoping that led to it, kept because the questions it answers
+are still the questions.
 
 Restating `future-work.md`'s framing, since it is the starting point:
 
@@ -262,14 +305,68 @@ milestone's name should not come to mean "keep the vault continuously
 current without being asked"** — if that is ever wanted, it is a
 separate, materially riskier proposal, per future-work.md's own framing.
 
-### Where it lives in the panel
+### Where it lives in the panel — DECIDED 2026-09-14, and shipped
 
-`future-work.md`'s open question, restated: does Discover belong in
+`future-work.md`'s open question was: does Discover belong in
 `plugin-shell` as a new view, or as a mode of the existing sidebar panel?
 The existing panel is already dense — connection state, actions, the
 document list, recovery — and a full repository browser competing for the
-same vertical space as milestone 5b's narrowed, pending-focused list is
+same vertical space as milestone 5b's narrowed, pending-focused list was
 worth deciding together rather than bolting on separately.
+
+DECIDED: the existing panel, as a THIRD section below the other two,
+absent entirely when empty exactly as they are. A separate view would
+need its own connection-state handling, its own refresh and its own empty
+states — a second surface to keep consistent with the first, for a list
+that is empty in the common case of a vault that is already current.
+
+The tree-shaped picker this section anticipated was NOT built. §E2 counted
+34 documents, which is a list; rows carry the full remote path, which is
+what an author choosing between documents they have never seen actually
+needs to read. Revisit if the corpus grows past what a list can carry.
+
+### What shipped
+
+SHIPPED:
+
+- A bounded, recursive repository-tree read reporting `truncated`, and the
+  truncation carried all the way to a line under the list rather than
+  dropped on the way.
+- Discovery as remote-markdown-paths minus VAULT paths, case-sensitively,
+  built from the vault's own files and never from stored records. A
+  document the vault holds at a different path still appears, and is
+  caught at import by the duplicate check rather than hidden.
+- The exclusion rule, which is "no front matter block at all" and nothing
+  cleverer — not a filename denylist, not the full seven-field contract.
+- Import, per document and as "Import all", writing each note at its exact
+  remote path with `doc_id` frozen and every other field preserved byte
+  for byte. "Import all" continues past a refusal and reports each.
+- Both import-time refusals, before anything is written: a duplicate
+  `doc_id` anywhere in the vault, naming the note that holds it, and an
+  occupied target path.
+
+- Milestone 9a, the attachment read side, in BOTH callers. An imported or
+  recovered document now brings its images with it, each written at its own
+  remote path, and a file the vault already holds at that path is left
+  alone. Recovery had this gap from the day it shipped — every recovered
+  document with a picture in it came back broken — and it is closed by the
+  same mechanism Import uses rather than by one of its own.
+
+  WORTH KNOWING, because the design it shipped under said otherwise: 9a's
+  mechanism was specified as "resolve the note's embeds through the
+  EXISTING `resolveEmbeddedAttachments`", which reads as the vault-backed
+  adapter and CANNOT WORK — that resolver answers only for files already in
+  the vault (`getFirstLinkpathDest` returns null for a link that resolves to
+  nothing, and the markdown-link branch requires the file to exist), so for
+  a note whose images are not there yet it resolves nothing. What ships is
+  the same function asked of a DIFFERENT INDEX, backed by the repository
+  listing. `embeds.ts` being pure logic over an interface is what made that
+  a swap rather than a rewrite.
+
+  Where a wikilink names a file the remote holds several of, the embed is
+  reported as unplaceable rather than guessed at: only Obsidian's own
+  shortest-path rule decides which one a note means, and add-attachment-sync
+  rejected reimplementing it.
 
 ## RESOLVED 2026-09-12 — the panel-scope conflict between ideas 2 and 3
 

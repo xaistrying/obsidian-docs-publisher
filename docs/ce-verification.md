@@ -1048,6 +1048,255 @@ path instead, or teach the pre-flight to recognise an imported document — are
 not evaluated here, deliberately: that is design work for that change's own
 proposal.
 
+### E4. The repository-tree response shape — OBSERVED 2026-09-14
+
+`listRepositoryFiles` (add-discover-and-import) parses
+`GET /projects/:id/repository/tree?ref=…&recursive=true&per_page=100&page=N`
+as a JSON array whose entries each carry a string `type` (`blob` for a file,
+`tree` for a folder) and a string `path`. Nothing in §§A-D covers this
+endpoint; it has never been called against any instance from this project.
+
+```
+curl -s -H "PRIVATE-TOKEN: <TOKEN>" \
+  "https://<host>/api/v4/projects/<encoded-id>/repository/tree?ref=main&recursive=true&per_page=100&page=1" \
+  | head -c 800
+```
+
+**CONFIRMED.** Entries carry `id`, `name`, `type`, `path` and `mode`, and
+`path` is the FULL path from the repository root — the case that mattered,
+since a folder-relative `path` would have mismatched every vault path and
+offered the entire corpus as importable. `type` was observed as `tree` for
+folders; `blob` was not in the portion of the response read, and is confirmed
+in practice by Discover listing anything at all (the code collects `blob`
+entries and nothing else).
+
+```json
+{"id":"fa805da1…","name":"plugins","type":"tree",
+ "path":".obsidian/plugins","mode":"040000"}
+```
+
+**AND IT TURNED UP A DEFECT, which is why this check was worth running.** The
+target project's default branch carries `.obsidian/` and `.claudian/`: the
+vault is committed whole, plugin folders and all. Obsidian's index contains
+no dot-folder, so `getMarkdownFiles` can never report a file under one — which
+means a markdown file under `.obsidian/` could never match a vault path, would
+have been offered as importable on every refresh forever, and could not have
+been imported anyway, since `vault.create` writes into the vault and a hidden
+folder is not in it.
+
+Fixed the same day: `discoveryCandidates` excludes any path with a
+dot-prefixed segment, which is Obsidian's own rule for what is not part of a
+vault. Nothing showed the symptom yet only because no plugin folder happens to
+hold a markdown file with front matter — the kind of latent wrongness that
+surfaces months later, from something unrelated dropping a note in one.
+
+WHAT WOULD HAVE BROKEN: an entry that does not parse makes the whole listing
+fail as `unexpected`, so Discover shows nothing and says the check did not
+succeed — the safe direction, but non-functional.
+
+### E5. The tree endpoint's permission name when refused — NOT OBSERVED
+
+Same gap as §A6 and §A8, for the same reason: a fine-grained token gates
+this read per-resource, and the plugin names the permission GitLab reports
+so the author knows which box to ask their admin to tick. No refusal of this
+endpoint has ever been seen, so the name is unknown.
+
+Repeat §B2's procedure with a token lacking repository read, and record what
+`error_description` names. Expected shape is `[Repository: Read]` or similar
+by analogy with the observed `[Merge Request: Read]`, but that is a guess and
+is recorded here as one.
+
+WHAT BREAKS IF WRONG: nothing functionally — `classifyScopedStatus` already
+produces `insufficient-permission` from the 403 alone, and the name is only
+the parenthetical in the message. An absent name drops the parenthetical
+rather than inventing one.
+
+### E6. An import that lands with its images — PARTIALLY OBSERVED 2026-09-14
+
+The end-to-end check add-discover-and-import owes. Run against a second,
+empty vault pointed at the same project — which is the setup this check
+NEEDS, since the ordinary vault already holds every document and Discover
+correctly offers nothing.
+
+**CONFIRMED so far, in the running plugin:**
+
+- The Discover section renders, listing documents by remote path with per-row
+  Import and an Import all.
+- An import lands the note at its exact remote path with its front matter
+  intact and `doc_id` added (observed: `Global/Contribution-Guide.md`,
+  `doc_id: Contribution-Guide`), and the note then appears under "Your
+  documents".
+- No `.obsidian/` or `.claudian/` path is offered, confirming §E4's fix in
+  the real environment.
+- `Products/Back-Office-Administration/README.md` IS offered, which is the
+  exclusion rule working as designed rather than a bug: it carries front
+  matter, and exclusion is by the absence of a block and never by filename.
+
+**CONTRADICTED — the submit check failed, and it is the one that mattered.**
+Submitting an imported document was refused with "This note's title or
+category is missing or not one of the nine categories." §E3's refusal was
+indeed dodged; a DIFFERENT one took its place at `readSubmissionFields`,
+because an imported document carries `doc_id` and therefore takes the
+resubmit path, which assumes `title`/`category` were written by a first
+submit that never happened. Freezing `doc_id` at import had MOVED the
+refusal rather than removed it, and "an imported document is submittable"
+was false.
+
+FIXED the same day: a note carrying `doc_id` but NO `category` has never been
+through a first submit in this vault, so its next submit collects and writes
+the two fields — the front matter contract performed rather than repeated.
+See `openspec/config.yaml`'s "WHO WRITES WHAT, AND WHEN", clarified to say
+so. A note that HAS `category` and a missing `title` still refuses, which is
+the hand-edit case that refusal was built for.
+
+**OBSERVED on the first real "import all" 2026-09-15 — the batch works, and
+the corpus collides.** Most documents imported; eight were refused, for three
+reasons, and all three refusals were CORRECT:
+
+```
+3 × README.md          (Back-Office-Administration, Barcode-Scanner,
+                        Terminal-BFVM) → all derive doc_id `README`
+5 × _placeholder.md    (FAQs, Known-errors, Reference, Runbooks, SOPs under
+                        Terminal-BFVM) → all derive doc_id `_placeholder`
+2 × names with spaces  `SB-SOP-001_Terminal-Offline (SAMPLE).md`,
+    and parentheses     `ProjectCode-SOP-NNN_SOP Name.md`
+```
+
+**This is `docs/document-identity.md` §3 working, not failing.** `doc_id` is
+the FILENAME, so files sharing a basename across folders derive one id, and
+one id means one branch `doc/<id>` — from which GitLab cannot hold two open
+merge requests. Refusing is the only correct answer. §3 anticipated it
+("hand-picked ids can collide where generated ones could not"); what is new
+is that the real corpus collides EIGHT TIMES, because `README.md` and
+`_placeholder.md` are precisely the files that do not follow the corpus's own
+control-ID naming convention.
+
+The first click imported everything importable; the second imported zero,
+which is correct — nothing importable was left. A batch is not idempotent
+because it does not need to be.
+
+TWO DEFECTS THIS EXPOSED, both fixed 2026-09-15:
+
+- **The refusal message was false.** It said "Another note in this vault is
+  already this document", which is true only for a document moved locally.
+  For two different READMEs it sends the author hunting for a duplicate that
+  does not exist. It now names the ID, the note holding it, and the only fix
+  that works — a rename on the platform.
+- **The batch notice was a wall of text.** Eight reasons in one notice
+  covered the panel it described. Reasons now render on the refused rows
+  themselves, where the author is already looking; the notice is a count.
+
+STILL OPEN, and a judgement call rather than a bug: `README.md` and
+`_placeholder.md` carry front matter, so the exclusion rule offers them, and
+the design accepted that consequence in the abstract ("importing it produces
+a note the author can delete"). Eight of them at once is more friction than
+that reasoning assumed. The argument against a filename denylist still
+stands. Worth revisiting only with a rule that is about the DOCUMENT rather
+than its name.
+
+**STILL TO RUN — AND add-discover-and-import SHIPPED WITHOUT IT, 2026-09-20.**
+The change that introduced Import closed with these unrun, deliberately: they
+need the running plugin against the real instance, and the work moved on. The
+debt is recorded here rather than in that change's task list because this file
+is where what-is-not-confirmed lives, and a closed change's tasks are no
+longer read.
+
+Everything below is covered by tests over fakes, which pin what the plugin
+BUILDS and never that the platform accepts it. Treat the attachment half as
+unproven until this has been run.
+
+- Edit an imported document and submit it. Confirm the submit modal OPENS
+  and collects title and category; confirm neither §E3's refusal nor the
+  front-matter one occurs; confirm a review opens for it.
+- Confirm the note afterwards carries exactly ONE `doc_id` line, plus the
+  `title` and `category` just collected, with every field it arrived with
+  still present and unreordered.
+- Confirm the committed content carries those fields too, not just the local
+  note — read the file back from the new branch.
+- Import a document that embeds an image. Confirm the image lands at its own
+  remote path and the embed renders in Obsidian rather than showing as an
+  unresolved link.
+- Recover a deleted note that embeds an image, and confirm the same. This
+  path has been broken since recovery shipped, so it is the one with no
+  prior working behaviour to compare against.
+- Import a document embedding an image whose filename the corpus holds in
+  more than one folder, if one exists. Confirm the author is told the embed
+  could not be placed rather than being given an image from the wrong folder.
+
+WHAT BREAKS IF THE ATTACHMENT HALF IS WRONG: the note still lands. Every
+attachment failure is per-attachment and reported, and nothing about an image
+can fail an import — so the failure mode to look for is a document that
+arrives readable with pictures missing, not a document that does not arrive.
+
+### E7. The non-raw file read carries base64 `content` — NOT OBSERVED
+
+`getFileBytes` (add-discover-and-import) reads an attachment's bytes from the
+SAME endpoint §B8 already covers for `last_commit_id`, taking the `content`
+field that `getFileCommitId` deliberately ignores. §B8 never looked at
+`content` or `encoding`, so this half of that response is unverified.
+
+```
+curl -s -H "PRIVATE-TOKEN: <TOKEN>" \
+  "https://<host>/api/v4/projects/<encoded-id>/repository/files/<url-encoded-path-to-a-png>?ref=main" \
+  | python3 -c "import json,sys; d=json.load(sys.stdin); print(d['encoding'], len(d['content']))"
+```
+
+- Confirm `encoding` is `base64` and `content` is the file's bytes so encoded.
+- Confirm it round-trips: decode it and compare against the file downloaded
+  from the `/raw` endpoint with `curl --output`. This is the check that
+  matters — an image that decodes to the wrong bytes renders as a broken
+  image rather than as an error.
+
+WHAT BREAKS IF WRONG: an `encoding` that is not `base64` is refused outright
+and reported as an image that did not arrive, which is the safe direction and
+is already handled. Bytes that decode wrongly are NOT caught and would land a
+corrupted image in the vault silently — the one failure here worth spending a
+real check on.
+
+### E8. Publishing into an EMPTY repository breaks the project permanently — OBSERVED 2026-09-21
+
+Not a spike. A real failure, on `styl-group1/kb-docs-02` (gitlab.com, numeric
+project id 86679032), found while diagnosing why a note could not be
+submitted.
+
+```
+default_branch:  doc/nets-69xxx-error-code      <- the plugin's OWN branch
+empty_repo:      false
+files on it:     L1/nets-69xxx-error-code.md    <- and nothing else
+```
+
+**The mechanism.** In an empty GitLab repository the FIRST branch created
+becomes the default branch. So:
+
+1. The project was created with no commits.
+2. A first submit committed to `doc/nets-69xxx-error-code`, the only branch —
+   which GitLab therefore made the default.
+3. `createMergeRequest` could not open: its source and target were now the
+   same branch.
+4. So `writeSubmissionFrontMatter` never ran. The COMMITTED copy carries
+   `category` and `doc_id`; the local note carries neither, and no record was
+   stored — the panel read "Nothing submitted yet" throughout.
+5. Every submit after that read the default branch, found the document's own
+   file at the target path, and was refused by `checkTargetPathFree`.
+   Permanently, for that document and every other.
+
+**FIXED the same day.** `getDefaultBranch` now refuses a project whose
+repository is empty, returning the new `empty-repository` failure kind rather
+than a ref, so nothing is written at all. It checks `empty_repo` AS WELL AS
+`default_branch`, because the two disagree in exactly the dangerous case: a
+fresh project reports the branch name it WOULD default to before any commit
+has created it, and trusting that name is what writes the first branch.
+
+The author is told to add a starting file to the project and try again, which
+is a thing they can do and which retrying is not.
+
+WHAT TO WATCH FOR: this is the one failure that does not announce itself. The
+symptom is a project whose `default_branch` is a `doc/…` name. If you see
+that, the project needs a real default branch restored before the plugin can
+be used against it — pushing an initial commit to `main` and setting it as
+the default — and the stranded `doc/…` branch's content is the document,
+recoverable by hand.
+
 ---
 
 ## Recording what you find

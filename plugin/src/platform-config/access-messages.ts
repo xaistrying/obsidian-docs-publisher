@@ -32,3 +32,25 @@ export function readOnlyMessage(roleLabel: string): string {
 		'Ask your admin for Developer access.'
 	);
 }
+
+/**
+ * Shown when the configured project's repository has no commits yet.
+ *
+ * NOT A NICETY, and not the same as "something went wrong". In an empty
+ * GitLab repository the FIRST branch created becomes the default branch, so
+ * a first submit into one makes that document's own `doc/<doc_id>` the
+ * default, its review cannot open (source and target would be the same
+ * branch), and every later submit is refused by the collision check against
+ * the document's own file. A real project was left permanently unusable this
+ * way on 2026-09-21, which is why the plugin now refuses before writing
+ * rather than reporting afterwards.
+ *
+ * Says what to do, and says it in a way that works from the platform's own
+ * UI. Vocabulary-checked like every author-facing string: no "branch",
+ * "commit", "merge request", "MR", or "main" — "starting file" is the plain
+ * way to say what a repository needs before anything can be published into
+ * it. "Open in GitLab" remains the one sanctioned naming of the platform.
+ */
+export const EMPTY_REPOSITORY_MESSAGE =
+	'This project has no files yet, so there is nothing to publish into. ' +
+	'Add a starting file to it in GitLab — a README will do — then try again.';

@@ -63,6 +63,13 @@ const FRONT_MATTER_BLOCK = /^---\r?\n([\s\S]*?)\r?\n---\r?\n/;
  * Returns `content` with `title`, `category` and `doc_id` merged into its
  * front matter block — a plain string operation that touches no file.
  *
+ * MERGED, not appended. Any of the three already in the block is removed
+ * first and rewritten at the end, so this never produces a duplicate key.
+ * That mattered the moment imported documents existed: import freezes
+ * `doc_id` into the block, so a first submit that blindly appended would
+ * commit a document carrying two `doc_id` lines and two answers to the
+ * question of what it is.
+ *
  * Exists for exactly one caller: `submit-document.ts`'s FIRST submit, to
  * compute what gets COMMITTED to the remote. `writeSubmissionFrontMatter`
  * only writes these three fields to the local note after the remote write
@@ -95,12 +102,32 @@ export function withSubmissionFrontMatter(
 
 	const [wholeMatch, body] = match;
 	const rest = content.slice(wholeMatch.length);
+	const kept = withoutKeys(body, ['title', 'category', 'doc_id']);
 	const merged =
-		`${body}\n` +
+		(kept === '' ? '' : `${kept}\n`) +
 		`title: ${yamlString(fields.title)}\n` +
 		`category: ${fields.category}\n` +
 		`doc_id: ${fields.docId}`;
 	return `---\n${merged}\n---\n${rest}`;
+}
+
+/**
+ * The block's body with any line opening one of `keys` removed.
+ *
+ * Line-based, which is exact for these three and only these three: all are
+ * plain scalars by contract — `title` is quoted by `yamlString`, `category`
+ * is a fixed enum, `doc_id` is validated git-ref-legal — so none can span
+ * lines or carry a block indicator whose continuation lines this would
+ * orphan. Every other field in the block, list-valued ones included, is
+ * untouched because it is never named here.
+ */
+function withoutKeys(body: string, keys: readonly string[]): string {
+	const pattern = new RegExp(`^(?:${keys.join('|')}):`);
+	return body
+		.split('\n')
+		.filter((line) => !pattern.test(line))
+		.join('\n')
+		.replace(/\n+$/, '');
 }
 
 /**
@@ -147,6 +174,32 @@ export function readSubmissionFields(
 	}
 
 	return { title: title.trim(), category };
+}
+
+/**
+ * Whether this note has ever been through a first submit BY THIS PLUGIN,
+ * answered by the presence of `category` — the field the plugin writes at
+ * that moment and at no other, and which nothing else in the corpus writes
+ * (`docs/ce-verification.md` §E2 found it absent from all 34 real
+ * documents).
+ *
+ * Exists to separate two notes that `readSubmissionFields` cannot tell
+ * apart, both of which make it answer null:
+ *
+ * - An IMPORTED document. It carries `doc_id`, frozen at import, but has
+ *   never been submitted from here, so `title`/`category` were never
+ *   collected. Its next submit is its first and must COLLECT them.
+ * - A tracked note whose author emptied `title` by hand. It has been through
+ *   a first submit, `category` is still there, and re-collecting would be
+ *   the repeat write the front matter contract forbids. It must REFUSE.
+ *
+ * Reading `category` rather than `title` is what makes the two separable:
+ * the real corpus carries `title` and never `category`, so the presence of
+ * `category` means this plugin put it there.
+ */
+export function hasSubmissionCategory(app: App, file: TFile): boolean {
+	const category = app.metadataCache.getFileCache(file)?.frontmatter?.['category'];
+	return typeof category === 'string' && category.trim() !== '';
 }
 
 function isCategory(value: string): value is Category {
@@ -197,4 +250,84 @@ export async function writeSubmissionFrontMatter(
 			frontmatter.doc_id = fields.docId;
 		}
 	});
+}
+
+/**
+ * Whether `content` opens with a YAML front matter block at all.
+ *
+ * The WHOLE of add-discover-and-import's exclusion rule (its design.md
+ * decision 6): a remote markdown file with no block is not offered for
+ * import, and nothing else disqualifies one. Not a filename denylist, which
+ * would need extending forever and would hide a real document someone named
+ * badly; not the full seven-field contract, which ZERO of the 34 documents
+ * in the real corpus would pass (`docs/ce-verification.md` §E2) — the fields
+ * they lack are precisely the ones this plugin itself writes.
+ *
+ * Reads the same `FRONT_MATTER_BLOCK` the merge above does, so "has a block"
+ * and "can have a field merged into it" can never disagree.
+ */
+export function hasFrontMatter(content: string): boolean {
+	return FRONT_MATTER_BLOCK.test(content);
+}
+
+const DOC_ID_LINE = /^doc_id:[ \t]*(.*)$/m;
+
+/**
+ * The `doc_id` a raw document's front matter already carries, or null.
+ *
+ * A STRING read rather than a `metadataCache` one, because import asks this
+ * of content that is not in the vault yet and therefore has no cache entry —
+ * `readDocId` in `submission-tracking/resolve.ts` is the counterpart for a
+ * note that is. Import needs the answer to avoid writing a SECOND `doc_id`
+ * key into a document this plugin itself published, which already carries
+ * one.
+ *
+ * Deliberately a line match rather than a YAML parse. The value it reads is
+ * validated as git-ref-legal before it was ever written
+ * (`docs/document-identity.md` §3), so it cannot carry a colon, a quote, a
+ * newline or a leading indicator character — the shapes a real parser exists
+ * to handle. Quotes are stripped anyway, since a hand-edited file may carry
+ * them.
+ */
+export function readContentDocId(content: string): string | null {
+	const match = FRONT_MATTER_BLOCK.exec(content);
+	if (match === null) {
+		return null;
+	}
+
+	const line = DOC_ID_LINE.exec(match[1]);
+	if (line === null) {
+		return null;
+	}
+
+	const value = line[1].trim().replace(/^["']|["']$/g, '').trim();
+	return value === '' ? null : value;
+}
+
+/**
+ * Returns `content` with `doc_id` appended to its front matter block, and
+ * NOTHING else changed — every other field is carried through byte for byte,
+ * in its original order and spelling.
+ *
+ * A string operation rather than `FileManager.processFrontMatter`, and that
+ * is the requirement rather than a convenience: `processFrontMatter`
+ * re-serializes the whole block, so a document written by someone else would
+ * come back with its quoting, key order and comments rewritten to Obsidian's
+ * taste. Import must add one line to a stranger's document and leave the rest
+ * of it alone (add-discover-and-import tasks.md 3.3).
+ *
+ * Returns `content` untouched when there is no block to merge into. Callers
+ * never see that case — discovery excludes exactly those files — but failing
+ * safe beats fabricating a block, the same choice
+ * `withSubmissionFrontMatter` above makes for the same reason.
+ */
+export function withDocId(content: string, docId: string): string {
+	const match = FRONT_MATTER_BLOCK.exec(content);
+	if (match === null) {
+		return content;
+	}
+
+	const [wholeMatch, body] = match;
+	const rest = content.slice(wholeMatch.length);
+	return `---\n${body}\ndoc_id: ${docId}\n---\n${rest}`;
 }
