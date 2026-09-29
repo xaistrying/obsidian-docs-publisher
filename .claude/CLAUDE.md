@@ -31,7 +31,7 @@ so the facts are looked up once, not re-derived or guessed per session.
   what "Test connection" does and does not prove. Read before touching
   credential handling or authentication.
 - `docs/ce-verification.md` — what has NOT been confirmed on the target
-  CE 19.3.0 instance, as a runnable checklist: permission names, response
+  CE instance, as a runnable checklist: permission names, response
   shapes the client parses, the `blocking_discussions_resolved` question, and
   the end-to-end checks. Each item says what breaks if the assumption is
   wrong. Read before treating a platform behaviour as established; record

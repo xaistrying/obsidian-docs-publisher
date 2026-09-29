@@ -48,12 +48,19 @@ picking one.
       impossible to attribute a submission to a person, and offboarding
       one author would force a rotation for everyone. CONFIRMED as the
       applicable branch — see below.
-  Confirmed: the target instance is GitLab Community Edition (CE)
-  v19.3.0, not Enterprise Edition — checked via the instance's
-  Help/version page. The version matters because several decisions in
+  Confirmed: the target instance is GitLab Community Edition (CE), not
+  Enterprise Edition — checked via the instance's Help/version page.
+  VERSION CORRECTED 2026-09-22: that page reads **19.4.0**. This sentence
+  said 19.3.0, and every document in this project inherited that number
+  from here. The instance was most likely upgraded on GitLab's monthly
+  cadence since the original check — which is the useful lesson, not the
+  digit: the target version MOVES, so any finding recorded as "confirmed
+  on CE 19.3.0" describes an instance that is no longer running. Record
+  the date beside the version, and see `ce-verification.md` §0, which is
+  now the authority for this row. The version matters because several decisions in
   this file turn on version-specific behaviour (`detailed_merge_status`
   from 15.6, fine-grained token enforcement from 18.11 and generally
-  available on Self-Managed at 19.2) — 19.3.0 post-dates all of them,
+  available on Self-Managed at 19.2) — 19.4.0 post-dates all of them,
   which is exactly why the instance already defaults to the
   fine-grained token flow rather than it being merely implied. CE ships
   without Premium/Ultimate
@@ -70,7 +77,7 @@ picking one.
   (2026-08-24), provisionally: fine-grained. Context for why this took
   a spike rather than a guess: fine-grained sidesteps the deprecation
   risk below entirely if it can do the job, and this instance runs
-  19.3.0, well past general availability, so early-beta partial
+  19.4.0, well past general availability, so early-beta partial
   coverage was not a safe assumption to carry forward untested.
   A manual spike confirmed it: all six required operations (create a
   branch, commit a file, create a merge request, list merge requests,
@@ -84,10 +91,10 @@ picking one.
   missed checkbox on token creation, not a missing capability.
   Two things remain, neither blocking platform-config:
     (a) DEFERRED, not blocking. This ran against gitlab.com (SaaS/EE,
-        continuous deployment), not the self-managed CE 19.3.0 target
+        continuous deployment), not the self-managed CE target
         instance, which is the one that actually matters — SaaS's
         fine-grained rollout is not guaranteed identical to
-        Self-Managed 19.3.0. Rerun against the real instance when
+        Self-Managed. Rerun against the real instance when
         convenient; not required before platform-config ships. The rerun
         is now a written checklist — `docs/ce-verification.md` §A — which
         also carries every other gitlab.com-only finding in this file.
@@ -154,7 +161,7 @@ picking one.
   `Merge Request: Read` sets, and worth the same explicit note in the
   setup guide.
   CAVEAT, the same one as (a): observed on gitlab.com, NOT on the
-  self-managed CE 19.3.0 target. The names are what CE should be checked
+  self-managed CE target. The names are what CE should be checked
   against, not what it is known to use — `docs/ce-verification.md` §A3
   and §A4 are how to check them.
   ADDED while implementing add-document-recovery, which brought two more
@@ -174,11 +181,65 @@ picking one.
       sub-resource of the merge request exactly as the discussions read
       above is — same caveat: that reasoning is exactly what A4 exists to
       distrust, and this has the same gap.
-  Consequence if either expectation is wrong: a token missing the right
-  permission sees the submit pre-flight or recovery fail as
-  insufficient-permission, and (per `docs/ce-verification.md`) whichever
-  permission name the refusal reports should be added to this file's
-  observed list rather than assumed from here.
+  ALL FOUR EXPECTATIONS ABOVE ARE NOW CONFIRMED, 2026-09-22, on the target
+  instance (CE 19.4.0) from a token narrowed to `Project: Read` alone. Each
+  name below is one CE reported ITSELF in an `insufficient_granular_scope`
+  refusal, which is the standard this section has always held:
+    - discussions read            → `Merge Request: Read`  (as expected)
+    - merge-request `/changes`    → `Merge Request: Read`  (as expected)
+    - raw file read               → `Repository: Read`
+    - repository tree             → `Repository: Read`
+  The sub-resource reasoning this section twice flagged as "exactly the kind
+  to distrust" was right both times. Recording that it was right is the point:
+  the reasoning was still worth distrusting, because the two occasions it was
+  wrong cost more than these four cost to check.
+  Newly named at the same time, neither previously mapped anywhere:
+    - `GET /user`                 → `User: Read`   — a USER-tab permission
+    - `GET /projects/:id`         → `Project: Read`
+    - branch read                 → `Branch: Read` — distinct from
+      `Repository: Read`, so reading a branch and reading a file are two
+      checkboxes, not one.
+  `User: Read` deserves its own line in the setup guide: it is on the token
+  screen's User tab rather than Group and project, so an author ticking
+  project permissions carefully will still miss it — and `getCurrentUser` is
+  the FIRST call "Test connection" makes, so the whole plugin fails at step
+  one without it.
+
+  READ-ONLY PASS AGAINST THE TARGET INSTANCE, 2026-09-22
+  (`git.styl.solutions` / `ivan/service.doc.kb`, via
+  `openspec/changes/archive/2026-09-29-verify-against-target-instance/probe.py`). What it
+  settles, and what it pointedly does not:
+    - SETTLED: the refusal BODY has the shape this project parses, on CE
+      and not only on gitlab.com. `/api/v4/version` refused with
+      `{"error":"insufficient_granular_scope","error_description":"Access
+      denied: This operation requires a fine-grained personal access token
+      with the following instance permissions: [Metadata: Read]."}` and
+      `extractPermissionDetail` pulled `Metadata: Read` out of it. The
+      author WOULD be shown which box to tick. Note CE says "instance
+      permissions" where gitlab.com said "project permissions"; the parse
+      reads the brackets and is indifferent.
+    - SETTLED: the instance is CE — `/api/v4/license` answers 404, which
+      EE serves.
+    - NOT SETTLED, and item (a) above therefore stays open: EVERY
+      permission name in this section is still gitlab.com-only. The run
+      used an un-narrowed token on a MAINTAINER account, so every call
+      succeeded and nothing was refused. A call that succeeds names no
+      permission. Narrowing a token on a DEVELOPER account is the only
+      instrument, and remains the outstanding work.
+    - NOT SETTLED: the discussions read (A4), the raw file read (A6), the
+      merge-request-changes read (A7) and the repository-tree read (E5)
+      all returned 200, so all four expectations above are still
+      expectations. `/merge_requests/:iid/changes` IS still served on this
+      version, which retires the separate worry that it had been
+      deprecated.
+
+  DISCREPANCY WITH `docs/ce-verification.md` §0 — RESOLVED 2026-09-22,
+  against this file. Help → Version reads CE **19.4.0**; the v19.3.0 above
+  was stale, and every other document inherited it from here. Corrected in
+  place at the top of this section. `ce-verification.md` §0 is now the
+  authority for edition and version, and records the reading with its
+  date — because the number moves and a dateless version is worse than no
+  version. Nothing in this project's decisions turns on 19.3 versus 19.4.
 
 ## 2. The deprecation risk
 
@@ -187,7 +248,7 @@ picking one.
   the broad legacy scopes — `api` among them — with granular
   permissions scoped to particular groups and projects. Enforcement was
   introduced in 18.11 behind feature flags and became generally
-  available on Self-Managed in 19.2. THIS INSTANCE IS 19.3.0, so it is
+  available on Self-Managed in 19.2. THIS INSTANCE IS 19.4.0, so it is
   past both: enforcement is not approaching, it is available to any
   administrator today and waits only on a date being set. Do not read
   this as a future concern.

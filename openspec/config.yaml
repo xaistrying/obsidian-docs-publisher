@@ -30,7 +30,7 @@ context: |
   BEFORE writing a design or spec that touches its subject, rather than
   re-deriving the facts or guessing.
   - `docs/gitlab-roles.md` — GitLab access levels (0/10/15/20/30/40/50),
-    what each can do for this plugin's operations on the target CE 19.3.0
+    what each can do for this plugin's operations on the target CE
     instance, and the three independent permission gates (project role,
     credential permissions, protected-branch merge rights). Required
     reading for anything that shapes UI by role, and for milestone 8's
@@ -47,7 +47,7 @@ context: |
     and what "Test connection" does and does not prove. Required reading
     before touching credential handling or authentication.
   - `docs/ce-verification.md` — every remote behaviour established on
-    gitlab.com but NOT yet confirmed on the self-managed CE 19.3.0 target,
+    gitlab.com but NOT yet confirmed on the self-managed CE target,
     as a runnable checklist: permission names, response shapes the client
     parses, the `blocking_discussions_resolved` question, and the
     end-to-end checks. Each item says what breaks if the assumption is
@@ -181,7 +181,7 @@ context: |
      Attachment paths follow the same 1:1 vault mirroring as documents and
      are pushed from their location at submit time. Tests arrived with
      this change (Vitest, `npm test`); the three facts only a server can
-     settle are `docs/ce-verification.md` §B9-B11.
+     settle (§B9-B11) were CONFIRMED on CE 2026-09-22.
   5. See your status — DONE (2026-09-11, add-document-status). Sidebar
      lists the author's own docs with their current state, resolved via
      reconciliation from front-matter `doc_id` alone. Read-only from the
@@ -192,9 +192,9 @@ context: |
      new client method for it." fix-interrupted-submit made that call
      first, on 2026-09-09, and proved reads are scope-gated too. Milestone
      5 GENERALIZED that endpoint and inherited its classification.
-     STILL OWED, non-blocking: the CE 19.3.0 spike on
-     `blocking_discussions_resolved` was not run. "Changes requested"
-     ships on the per-merge-request discussions read instead, which is
+     SETTLED 2026-09-22: `blocking_discussions_resolved` IS present on
+     CE's listing entry. "Changes requested" still ships on the
+     per-merge-request discussions read, which is
      correct whether or not that field exists and whether or not the
      project's "all threads must be resolved before merging" setting is on
      — so that setting is NOT a prerequisite here.
@@ -344,6 +344,15 @@ context: |
     merge request feature meaning a real MR marked not-ready, which is a
     different thing. Here `unsubmitted` means no branch and no merge
     request exist yet; the author-facing label is "Not submitted yet".
+    AMENDED 2026-09-22: "a local cache" stopped being the whole truth when
+    Import shipped. An IMPORTED document's record says it is published, and
+    nothing on the remote can say that — reconciliation resolves state from
+    merge requests, and an import has none. Lose `data.json` and submissions
+    still heal from each note's `doc_id`; imported documents do not, and all
+    read "Not submitted yet" again. So plugin data now holds one fact of its
+    own, and anything that deletes it loses real information rather than a
+    rebuildable cache. `plugin/install.sh` wiped it on every reinstall for
+    exactly this reason and now preserves it.
   - Submission state lives ONLY in plugin data, never in the note's front
     matter. Writing it into front matter would commit workflow state into
     the repository, produce a diff on every review round, and leave a

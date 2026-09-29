@@ -6,7 +6,7 @@ tracks and shows, and that directly reference the open questions
 Read that file first — this doc picks up exactly where it left off, for the
 two threads it names but does not resolve.
 
-## Milestone 5b — Reset, and repurposing "Your documents"
+## Milestone 5b — Reset, and repurposing "Your documents" (now "Needs you")
 
 SHIPPED 2026-09-13 (`add-reset-and-panel-scope`). This section described the
 design questions before the milestone was built; it now describes what is
@@ -104,33 +104,40 @@ one. There is deliberately no command-palette entry either.
 
 ### Repurposing "Your documents" to active-MR states
 
-Shipped as scoped. `renderDocumentList` partitions `listVaultDocuments`
-against `this.statuses.statusFor` — no new read, no remote call:
+**AS BUILT, 2026-09-27 (`name-panel-sections-by-next-actor`).** The split
+shipped 2026-09-13 was replaced twice: on 2026-09-22 the "Other documents"
+list was removed and the primary list narrowed to work owed, and on
+2026-09-27 that list was renamed and given a sibling. `renderDocumentList`
+partitions `listVaultDocuments` through `panelSection` (`document-status.ts`,
+built from `needsAuthor`) — no new read, no remote call:
 
 ```
-Your documents    → never submitted, unresolved, pending, changes-requested
-Other documents   → published, not accepted
+Needs you              → never submitted, unresolved, changes requested,
+                         not accepted, and anything with unsent edits
+Waiting on reviewers   → awaiting review, no unsent edits (collapsed by default)
+(not listed)           → published, no unsent edits
 ```
 
-An UNRESOLVED document stays in "Your documents". Moving it would assert
-its cycle is over, which is the silent wrongness `add-document-status`
-exists to prevent — the same reason its row shows no state label.
+Each heading names who acts next. "Needs you" was "Your documents", which
+read as ALL of the author's documents, so a submitted one missing from it
+read as a failed submit (`docs/ce-verification.md` §D0a). "Waiting on
+reviewers" exists so a submit MOVES a document instead of removing it; its
+heading count going up is the confirmation. It is present even at zero and
+reports "(check failed)" like the other collapsible sections.
 
-"Other documents" is absent entirely when empty, the way "Documents you can
-recover" already is, rather than shown with a competing empty state. The
-primary section has its own second empty state for the vault whose every
-document has finished ("Nothing is waiting for review right now"), since
-"Nothing submitted yet" would be false there.
+An UNRESOLVED document stays in "Needs you". Placing it under "Waiting on
+reviewers" would assert a review nothing established, which is the silent
+wrongness `add-document-status` exists to prevent — the same reason its row
+shows no state label.
 
-The heading shipped as "Other documents" — the working name, kept, with a
-line under it naming what it holds ("Published documents, and documents
-that weren't accepted."). The heading stays true as states are added; the
-description is what keeps it from reading as a leftovers bin.
+Empty states: "Nothing submitted yet. Documents you submit will be listed
+here." with nothing tracked; "Nothing needs you right now." with documents
+tracked but none owed; "Nothing is waiting for review right now." for
+"Waiting on reviewers" expanded and empty.
 
-What the second section buys is VISIBILITY, not rescued actions. The
-resubmit actions for published and not-accepted documents render in the
-submit section for whichever note is open — see the corrected premise at
-the end of this doc — and no row in either list carries an action.
+No row in either list carries an action. The resubmit actions for published
+and not-accepted documents render in the submit section for whichever note
+is open — see the corrected premise at the end of this doc.
 
 ### The recovery-scope question `future-work.md` already raised
 

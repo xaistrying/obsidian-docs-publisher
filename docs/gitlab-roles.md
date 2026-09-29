@@ -2,7 +2,7 @@
 
 Reference for how GitLab's access levels map onto the actions Docs Publisher
 performs. Written against the target instance: **GitLab Community Edition
-(CE) 19.3.0, self-managed**, project visibility **private**. Facts that
+(CE) 19.4.0, self-managed**, project visibility **private**. Facts that
 depend on either of those are marked.
 
 Verified 2026-08-26 against <https://docs.gitlab.com/user/permissions/>.
@@ -79,7 +79,7 @@ self-managed GitLab. They can on public and internal projects. Since this
 project is private, a Guest sees nothing at all.
 
 <sup>2</sup> Planner gained repository code viewing in **18.7**. The target
-instance is 19.3.0, so this holds. On an older instance it would not.
+instance is 19.4.0, so this holds. On an older instance it would not.
 
 <sup>3</sup> **Default only, and defaults are not guarantees.** See §5.
 
