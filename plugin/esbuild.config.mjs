@@ -52,7 +52,6 @@ if (prod) {
     fs.writeFileSync('main.js', mainJs);
   }
 } else {
-  // Development build with watch
-  const context = await esbuild.context(options);
-  await context.watch();
+  // Development build with watch (esbuild 0.13 has no context(); build takes `watch`)
+  await esbuild.build({ ...options, watch: true });
 }

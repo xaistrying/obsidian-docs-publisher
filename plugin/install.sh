@@ -52,52 +52,25 @@ fi
 # Create plugins directory if it doesn't exist
 mkdir -p "$VAULT_PATH/.obsidian/plugins"
 
-# Preserve the plugin's own data across a reinstall.
+# Run from the plugin folder wherever the script was invoked from, and refuse
+# before touching the vault if there is nothing built to install.
+cd "$(dirname "$0")"
+if [ ! -f main.js ]; then
+    log_error "main.js not found — run 'npm run build' first"
+    exit 1
+fi
+
+# Overwrite the runtime files in place and NEVER remove the folder.
 #
-# `data.json` lives INSIDE the plugin folder, so the wipe below took it with
-# it every time. That file is the only local record of what this vault has
-# submitted and imported — and only submissions heal themselves afterwards,
-# by reconciling from each note's `doc_id`. IMPORTED documents have no merge
-# request to reconcile from, so losing it made every imported document read
-# as "Not submitted yet" again (observed 2026-09-22, after a reinstall).
-DATA_BACKUP=""
-if [ -f "$PLUGIN_PATH/data.json" ]; then
-    DATA_BACKUP=$(mktemp)
-    cp "$PLUGIN_PATH/data.json" "$DATA_BACKUP"
-    log_info "Keeping existing plugin data..."
-fi
-
-# Remove old installation if it exists
-if [ -d "$PLUGIN_PATH" ]; then
-    log_info "Removing old plugin installation..."
-    rm -rf "$PLUGIN_PATH"
-fi
-
-# Copy plugin to vault
+# `data.json` lives INSIDE the plugin folder and is the only local record of
+# what this vault has submitted and imported — only submissions heal
+# themselves afterwards, by reconciling from each note's `doc_id`. IMPORTED
+# documents have no merge request to reconcile from, so losing it made every
+# imported document read as "Not submitted yet" again (observed 2026-09-22,
+# after a reinstall that wiped the folder).
 log_info "Installing Docs Publisher plugin..."
 mkdir -p "$PLUGIN_PATH"
-
-# Copy essential files
-cp manifest.json "$PLUGIN_PATH/"
-cp main.js "$PLUGIN_PATH/"
-cp styles.css "$PLUGIN_PATH/" 2>/dev/null || true
-cp package.json "$PLUGIN_PATH/" 2>/dev/null || true
-cp package-lock.json "$PLUGIN_PATH/" 2>/dev/null || true
-cp tsconfig.json "$PLUGIN_PATH/" 2>/dev/null || true
-cp esbuild.config.mjs "$PLUGIN_PATH/" 2>/dev/null || true
-cp .gitignore "$PLUGIN_PATH/" 2>/dev/null || true
-
-# Copy src directory
-if [ -d "src" ]; then
-    cp -r src "$PLUGIN_PATH/"
-fi
-
-# Put the data back, now that the folder exists again.
-if [ -n "$DATA_BACKUP" ]; then
-    cp "$DATA_BACKUP" "$PLUGIN_PATH/data.json"
-    rm -f "$DATA_BACKUP"
-    log_info "Restored existing plugin data"
-fi
+cp manifest.json main.js styles.css "$PLUGIN_PATH/"
 
 log_success "Plugin installed successfully"
 log_info ""
