@@ -397,22 +397,63 @@ case.
 ### Requirement: Front matter is completed only after the document reaches the remote
 The plugin SHALL NOT write `title`, `category`, or `doc_id` into the note's
 front matter until both the remote commit and the merge request have
-succeeded. On any failure at any point in the submit sequence — including a
-failed check of the target's state, a failed clearing of a previous attempt,
-and a refusal because a submission is already awaiting review — the note's
-front matter SHALL remain exactly as it was before the submit attempt.
+succeeded. On any failure before those remote writes have succeeded —
+including a failed check of the target's state, a failed clearing of a
+previous attempt, and a refusal because a submission is already awaiting
+review — the note's front matter SHALL remain exactly as it was before the
+submit attempt. A failure of the front-matter write itself, after the remote
+writes succeeded, may leave the front matter incomplete; that case is covered
+by "A submission records the document before writing its front matter".
 
 #### Scenario: Front matter after a successful submission
 - **WHEN** a document's first submission completes successfully with title "CEPAS 3 Payments Fail with Error 200" and category "Diagnostic Reference"
 - **THEN** the note's front matter now contains `title: CEPAS 3 Payments Fail with Error 200`, `category: Diagnostic Reference`, and `doc_id` set to the filename that was current at confirm time
 
 #### Scenario: Front matter after a failed submission
-- **WHEN** a document's first submission attempt fails, for any reason
+- **WHEN** a document's first submission attempt fails before its remote commit and merge request have both succeeded, for any reason
 - **THEN** the note's front matter contains none of `title`, `category`, or `doc_id`
 
 #### Scenario: Front matter after a refusal because something is already awaiting review
 - **WHEN** the submit is refused because an open submission already exists for the document's target
 - **THEN** the note's front matter is unchanged, and in particular no `doc_id` is written
+
+### Requirement: A submission records the document before writing its front matter
+Once a first submission's remote writes have succeeded, the plugin SHALL
+persist the document's tracking record BEFORE writing `doc_id`, `title` or
+`category` into the note, so that no failure between the two can leave work on
+the remote that nothing locally describes.
+
+The ordering is the requirement, not an implementation note. A submission has
+two halves, and the remote half is the one that cannot be undone: once a branch
+and a merge request exist, the document exists. If the local half then fails
+part-way, what matters is which part survived. Recording first means the worst
+case is a tracked document whose front matter is incomplete — a state this
+capability already knows how to finish, since a note carrying `doc_id` but no
+`category` has not been through a first submit in this vault and its next
+submit collects and writes both. Recording last means the worst case is a note
+with no `doc_id` at all, which no surface can find: the panel lists documents
+by `doc_id`, reconciliation matches by `doc_id`, and recovery is offered by
+`doc_id`. The document then exists on the remote and nowhere else.
+
+The edit baseline SHALL still describe the note as it stands after the
+front-matter write, so recording the document early SHALL NOT record a baseline
+taken before that write.
+
+#### Scenario: A first submission completes normally
+- **WHEN** a document's first submission succeeds end to end
+- **THEN** it is tracked, its front matter carries `doc_id`, `title` and `category`, and its edit baseline describes the note as written
+
+#### Scenario: The front-matter write fails after the remote writes succeeded
+- **WHEN** a first submission's branch and merge request are created and the front-matter write then fails
+- **THEN** a tracking record for the document already exists, so the document is listed, reconciled and visible to the author rather than existing only on the remote
+
+#### Scenario: A submission that failed part-way is resubmitted
+- **WHEN** the author submits a document that was recorded but whose front matter was left incomplete
+- **THEN** the submission collects and writes the missing fields rather than refusing, exactly as it does for any note carrying `doc_id` and no `category`
+
+#### Scenario: The remote writes fail
+- **WHEN** a first submission's branch, commit or merge request does not succeed
+- **THEN** no tracking record is written, because there is nothing on the remote for it to describe
 
 ### Requirement: A failed check of the target's state stops the submission
 When the plugin cannot establish whether the document's target exists, it
@@ -499,9 +540,16 @@ tracked branch. It SHALL write the remote's content verbatim, including
 front matter, so the note afterwards matches what reviewers are looking at
 byte for byte.
 
-It SHALL NOT write a tracking record, SHALL NOT change the document's
-state, and SHALL NOT re-assert any front matter field of its own.
-Resetting local content changes nothing about the review.
+It SHALL NOT change the document's state, its branch, or its remote path,
+and SHALL NOT re-assert any front matter field of its own. Resetting local
+content changes nothing about where the review stands.
+
+It SHALL record the edit baseline for the note it has just written, so a
+document reset to the version under review is not afterwards reported as
+edited. That baseline describes the note rather than the review, so writing
+it is consistent with the paragraph above rather than an exception to it —
+leaving it stale would assert that the note differs from a version it is
+byte-identical to.
 
 #### Scenario: A note with local edits is reset
 - **WHEN** the author resets a document whose note has been edited since it was last submitted
@@ -509,7 +557,15 @@ Resetting local content changes nothing about the review.
 
 #### Scenario: The document's state is untouched
 - **WHEN** a document whose state is changes-requested is reset
-- **THEN** its state is still changes-requested afterwards, and no tracking record was written
+- **THEN** its state is still changes-requested afterwards, and neither its branch nor its remote path was changed
+
+#### Scenario: The reset note is not reported as edited
+- **WHEN** a document is reset and its note is not edited afterwards
+- **THEN** the panel does not report that document as edited, because its note matches what the plugin last wrote
+
+#### Scenario: Editing after a reset
+- **WHEN** the author edits a note after resetting it
+- **THEN** the panel reports that document as edited again
 
 ### Requirement: Reset always asks before overwriting, with no silent path
 The plugin SHALL ask the author to confirm before every Reset, naming that
@@ -731,3 +787,24 @@ with the first exactly when it mattered.
 #### Scenario: A document embeds another document
 - **WHEN** an imported document embeds another note rather than an attachment
 - **THEN** nothing is fetched for it and nothing is reported, since embedding one document in another is out of scope for this plugin entirely
+
+### Requirement: A submission records the project it submitted to
+A successful submission SHALL record the project it wrote to alongside the
+branch and merge request it created, so that the record it leaves says where
+that work lives and not merely that it exists.
+
+A submission is the other moment, besides a confirmed reconciliation, at which
+a document's project is established by evidence rather than assumption: the
+branch and the merge request were just created there.
+
+#### Scenario: A first submission records its project
+- **WHEN** a document is submitted for the first time and its remote writes succeed
+- **THEN** its record carries the project those writes went to, alongside the branch and merge request
+
+#### Scenario: A revision records the project it pushed to
+- **WHEN** a revision is pushed to an existing review
+- **THEN** the record still carries the project that review lives on
+
+#### Scenario: Submitting a document whose record belongs elsewhere
+- **WHEN** the author submits a document whose existing record carries a different project than the configured one
+- **THEN** it is submitted as a first submission into the configured project, and its record afterwards carries the configured project rather than the previous one

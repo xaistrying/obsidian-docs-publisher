@@ -135,52 +135,127 @@ through the same path as the command palette entry.
 
 ### Requirement: The panel lists the author's documents with their current state
 The sidebar view SHALL list every note in the vault whose front matter
-carries a `doc_id`, showing each one's name and its current state's
-author-facing label, across its two sections taken together. Notes carrying
-no `doc_id` SHALL NOT appear in either list.
+carries a `doc_id` and that has a next action, showing each one's name and
+its current state's author-facing label. A document has a next action when
+the author or a reviewer is expected to act on it. A document that is
+published, and whose note has not been edited since the plugin last wrote it,
+has none, and SHALL NOT be listed: a list of settled documents is reference
+rather than work, and the panel deliberately does not carry one. Notes
+carrying no `doc_id` SHALL NOT appear in any list.
 
-Narrowing the primary section SHALL NOT remove any document from view: a
-document that leaves the primary section appears in the secondary one, so
-what the author can see is unchanged by the split.
+A document's state label SHALL be shown whenever that document has a resolved
+state. No marker a row also carries SHALL be displayed in place of that
+label. Markers describing the note — that it has been edited since it was
+last sent, for instance — SHALL be shown alongside the state, not instead of
+it: the state is where the document stands with its reviewers and the marker
+is what is true of the local note, and an author acting on one needs the
+other.
 
 #### Scenario: Documents are listed with their states
-- **WHEN** the author opens the sidebar view in a vault holding one published document, one awaiting review and one that was not accepted
-- **THEN** all three are listed, each showing its own state's label, the awaiting-review one in the primary section and the other two in the secondary section
+- **WHEN** the author opens the sidebar view in a vault holding one note that carries `doc_id` but was never submitted, one document awaiting review, one with changes requested, one not accepted and one published, none of them edited since they were last sent
+- **THEN** the first four are listed, each showing its own state's label, and the published one is not listed
+
+#### Scenario: A published document that has been edited
+- **WHEN** a published document's note has been edited since it was last sent
+- **THEN** it is listed, showing the "Published" label and the edited marker
 
 #### Scenario: Notes that have never been submitted are not listed
 - **WHEN** the author opens the sidebar view in a vault holding many notes, only some of which carry `doc_id`
-- **THEN** only the notes carrying `doc_id` appear, in either section
+- **THEN** only notes carrying `doc_id` appear
 
 #### Scenario: The list is empty before anything has been submitted
-- **WHEN** the author opens the sidebar view in a vault where no document has been submitted
-- **THEN** the primary section shows nothing rather than an error, the secondary section does not appear, and the view's existing controls are unaffected
+- **WHEN** the author opens the sidebar view in a vault where no note carries `doc_id`
+- **THEN** the "Needs you" section reads "Nothing submitted yet. Documents you submit will be listed here.", rather than showing an error, and the view's existing controls are unaffected
 
-### Requirement: The panel separates documents with an open review cycle from the rest
-The sidebar view SHALL present tracked documents in two sections: a primary
-section for documents with an open review cycle, and a secondary,
-lower-prominence section for documents whose cycle is over. A document
-whose state has not been resolved SHALL appear in the primary section, and
-SHALL NOT be placed in the secondary one, since placing it there would
-assert a settled state nothing has established.
+#### Scenario: A document that is both under review and locally edited
+- **WHEN** a document whose state is changes-requested has been edited since it was last sent
+- **THEN** its row shows the changes-requested label AND the edited marker, so the author can see both where the review stands and that local work has not reached it
 
-The secondary section SHALL be absent entirely when it holds nothing,
-rather than shown with an empty-state message.
+#### Scenario: An edited document whose state is unresolved
+- **WHEN** a document has been edited since it was last sent and no refresh has resolved its state
+- **THEN** its row shows the edited marker and no state label, since no state has been established to show
+
+### Requirement: The panel separates documents by who acts next
+The sidebar view SHALL present listed documents in two sections, each named
+for who acts next, and every listed document SHALL be in exactly one of them:
+
+- **"Needs you"** SHALL hold every document waiting on the author: never
+  submitted, changes requested, not accepted, any document edited since it was
+  last sent, and any document whose state has not been resolved.
+- **"Waiting on reviewers"** SHALL hold every document waiting for review
+  whose note has not been edited since it was last sent.
+
+A document whose state has not been resolved SHALL NOT be placed in "Waiting
+on reviewers", since that would assert a review nothing has established.
+
+"Needs you" SHALL come first and hold the Refresh control. "Waiting on
+reviewers" SHALL be collapsible, SHALL be collapsed when the view opens, and
+SHALL be present whether or not it holds anything. Its heading SHALL report
+its count while collapsed, or that the last check failed, so that collapsing
+it hides the list and never the count.
+
+Each section SHALL carry a one-line description of what it holds, shown
+whether or not it has rows. "Needs you" SHALL read "Documents waiting on you:
+not sent yet, sent back by a reviewer, or changed since you last sent them."
+"Waiting on reviewers", when expanded, SHALL read "Sent and unchanged. Nothing
+to do until a reviewer responds." A heading names the rule only to someone
+who already knows it.
+
+When "Needs you" holds nothing but some note carries `doc_id`, it SHALL read
+"Nothing needs you right now." When "Waiting on reviewers" is expanded and
+holds nothing, it SHALL read "Nothing is waiting for review right now."
 
 #### Scenario: A vault holding documents in several states
-- **WHEN** the author opens the sidebar view in a vault holding one document awaiting review, one with changes requested, one published, and one not accepted
-- **THEN** the first two appear in the primary section and the last two appear in the secondary section
-
-#### Scenario: A document whose state has not been resolved yet
-- **WHEN** a tracked document's state has not been resolved, because no refresh has succeeded in this session
-- **THEN** it appears in the primary section, and is not placed in the secondary section
-
-#### Scenario: Nothing has finished its cycle yet
-- **WHEN** the author opens the sidebar view in a vault where no document is published or not accepted
-- **THEN** the secondary section does not appear at all
+- **WHEN** the author opens the sidebar view in a vault holding one document awaiting review, one with changes requested, one published, and one not accepted, none of them edited since they were last sent
+- **THEN** the changes-requested and not-accepted ones are in "Needs you", the awaiting-review one is in "Waiting on reviewers", and the published one is in neither
 
 #### Scenario: A never-submitted note stays where it was
 - **WHEN** the author opens the sidebar view in a vault holding a note that carries `doc_id` but resolves as never submitted
-- **THEN** it appears in the primary section, as it does today
+- **THEN** it appears in "Needs you"
+
+#### Scenario: A submitted document moves rather than disappears
+- **WHEN** the author submits a document and does not edit it afterwards
+- **THEN** it is no longer in "Needs you", it is in "Waiting on reviewers", and that section's heading count has gone up by one
+
+#### Scenario: Editing a document under review
+- **WHEN** the author edits a document that is in "Waiting on reviewers"
+- **THEN** it moves to "Needs you", showing "Waiting for review" and the edited marker
+
+#### Scenario: Sending an update
+- **WHEN** the author sends an update for a document that is waiting for review and has been edited
+- **THEN** it moves back to "Waiting on reviewers"
+
+#### Scenario: A reviewer requests changes
+- **WHEN** a document in "Waiting on reviewers" is refreshed and resolves as changes requested
+- **THEN** it moves to "Needs you", showing "Changes requested"
+
+#### Scenario: A document whose state has not been resolved yet
+- **WHEN** a tracked document's state has not been resolved, because no refresh has succeeded and nothing is stored for it
+- **THEN** it appears in "Needs you", and not in "Waiting on reviewers"
+
+#### Scenario: The section opens collapsed
+- **WHEN** the author opens the sidebar view while two documents are waiting for review and untouched
+- **THEN** "Waiting on reviewers" shows its heading and a count of 2, and no rows until the author expands it
+
+#### Scenario: Expanded, the section shows full rows
+- **WHEN** the author expands "Waiting on reviewers"
+- **THEN** each document in it is shown with its name, its state's label and its way to open it on the platform, as in "Needs you"
+
+#### Scenario: Nothing needs the author, but something is under review
+- **WHEN** every tracked document is either waiting for review and untouched, or published and untouched
+- **THEN** "Needs you" reads "Nothing needs you right now."
+
+#### Scenario: Nothing is under review
+- **WHEN** no document is waiting for review untouched and the author expands "Waiting on reviewers"
+- **THEN** it reads "Nothing is waiting for review right now.", and its collapsed heading shows a count of 0
+
+#### Scenario: Each section says what it holds
+- **WHEN** the author opens the sidebar view and expands "Waiting on reviewers", before any refresh has run
+- **THEN** "Needs you" shows its description and "Waiting on reviewers" shows its own, whatever rows either section has
+
+#### Scenario: A refresh fails
+- **WHEN** the last refresh failed and "Waiting on reviewers" is collapsed
+- **THEN** its heading reports that the check failed, rather than a count that might be stale
 
 ### Requirement: The panel offers Reset for a document with an open review cycle
 The sidebar view SHALL offer a Reset action for the currently open note
@@ -376,10 +451,27 @@ selects that document's recovery action.
 
 ### Requirement: A tracked document offers a resubmit action in every state
 The sidebar view SHALL offer an action for the currently open document
-whenever it is already tracked, matching that document's resolved state,
+whenever it is already tracked, matching that document's RESOLVED state,
 rather than showing only its state label. Selecting the action SHALL
 resubmit through the same path as the command palette's "Submit for
 review" command.
+
+The action and the label SHALL be derived from the same answer. The view
+SHALL NOT take its label from a stored record while taking its eligibility
+from somewhere else: a record describes where a document stood on the project
+it was written against, and offering an action from it while the resolved
+state says otherwise acts on a claim the remote has not made.
+
+No action SHALL be offered for a document whose record belongs to a project
+other than the configured one, or whose project is not known. Such a document
+has no resolved state, and an action built from its record would carry a branch
+and a merge request belonging to a different project.
+
+A document whose record names a DIFFERENT project, and for which the configured
+project holds no review, SHALL be marked as being in another project. Without
+the marker it reads exactly like work owed on this project, and its only offered
+action submits into the configured one. A record whose project is not known
+SHALL NOT be marked: that would assert the one thing not established.
 
 #### Scenario: A pending document offers to push an update
 - **WHEN** the currently open document's resolved state is pending
@@ -400,3 +492,19 @@ review" command.
 #### Scenario: The command palette and the panel action agree
 - **WHEN** the author resubmits the same document once through the panel's action and once through the command palette, in separate sessions with identical starting state
 - **THEN** both produce the same outcome
+
+#### Scenario: The open document's record belongs to another project
+- **WHEN** the currently open document's record carries a project other than the configured one, and the configured project holds no review for it
+- **THEN** no resubmit action is offered for it and no state label is shown, and it is marked as being in another project, so an author who configured the wrong project by mistake is warned before submitting into it
+
+#### Scenario: A record whose project is not known is not marked
+- **WHEN** a document's record carries no project, and the configured project holds no review for it
+- **THEN** no state label and no marker are shown, since nothing established where it belongs and saying "another project" would assert it
+
+#### Scenario: The plugin is pointed at a different project
+- **WHEN** the connection details are changed to a different project, and the documents in the vault were submitted to the previous one
+- **THEN** none of them is shown a state or offered an action, rather than continuing to show the states they held on the previous project
+
+#### Scenario: Submitting into the new project is still offered
+- **WHEN** the author opens a document whose record belongs to a different project, and that document has never been submitted to the configured one
+- **THEN** the view offers a first submission, since submitting into the configured project is a thing the author can still do

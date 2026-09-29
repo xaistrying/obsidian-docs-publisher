@@ -129,6 +129,17 @@ frozen `doc_id` against the remote's merge requests, and SHALL treat its own
 persisted records as a cache of that answer rather than as the answer. Where
 a stored record disagrees with the remote, the remote SHALL win.
 
+Reconciliation SHALL cover every document this capability holds a record for,
+whether or not a note for it exists in the vault. A record whose note has been
+deleted is the case that most needs correcting — nothing else in the vault
+describes that document — and it is the case a vault-driven scope silently
+omits.
+
+A record SHALL NOT be able to hold a state the remote has moved past
+indefinitely. Any surface that decides what to offer an author from a stored
+state depends on this: a state that is never re-asked is not a cache, and
+treating it as one offers actions against a situation that has ended.
+
 #### Scenario: A stored state that the remote has moved past
 - **WHEN** a document's stored record says it is awaiting review and the remote shows its merge request has been merged
 - **THEN** the document resolves as published, and the stored record is updated to match
@@ -136,6 +147,18 @@ a stored record disagrees with the remote, the remote SHALL win.
 #### Scenario: A note with no stored record at all
 - **WHEN** a note carrying `doc_id` in its front matter is resolved on a machine whose plugin data holds no record for it
 - **THEN** the document's state is resolved from the remote exactly as it would be with a record present, and a record is created from that answer
+
+#### Scenario: A stored record whose note is no longer in the vault
+- **WHEN** a refresh runs and a stored record's `doc_id` matches no note in the vault
+- **THEN** that document is reconciled against the remote like any other, and its stored state is corrected if the remote has moved past it
+
+#### Scenario: A document whose review ended while its note was absent
+- **WHEN** a document's note was deleted while it was awaiting review, and its merge request is afterwards merged
+- **THEN** the next refresh resolves it as published, so no surface continues to offer it as a document still under review
+
+#### Scenario: An orphaned record for a document the remote no longer has
+- **WHEN** a stored record's `doc_id` matches no merge request on the remote
+- **THEN** it resolves to no state, exactly as a note in the same position would, and is not presented as though its state were known
 
 ### Requirement: Reconciliation matches a document by its frozen identity, in a fixed precedence
 This capability SHALL reconcile a document by matching `doc/<doc_id>` against
@@ -147,8 +170,11 @@ most recent first, and SHALL resolve the result in this order:
    published, closed without merging resolves as not accepted.
 3. No merge request at all resolves as never submitted.
 
-It SHALL match by `doc_id` read from the note's own front matter, never by
-the note's file path and never by a stored record.
+Where a note carrying `doc_id` exists, it SHALL match by the `doc_id` read
+from the note's own front matter, never by the note's file path and never by
+a stored record. Where a stored record has no note in the vault, it SHALL
+match by the record's own `doc_id`, which was frozen when the record was
+written; that is the only identity such a document still has.
 
 #### Scenario: An open merge request takes precedence over older ones
 - **WHEN** a document has one open merge request and two older merged ones
@@ -170,18 +196,49 @@ the note's file path and never by a stored record.
 - **WHEN** a note carrying `doc_id` is reconciled and the remote holds no merge request for it
 - **THEN** it resolves as never submitted
 
+#### Scenario: A stored record whose note is absent
+- **WHEN** a stored record is reconciled and no note in the vault carries its `doc_id`
+- **THEN** it is matched by the `doc_id` held in the record, under the same precedence as any other document
+
 ### Requirement: Reconciliation reads the remote once for all documents
 This capability SHALL reconcile every known document against a single
 listing of the remote's merge requests, matching locally. It SHALL NOT make
 one request per document.
 
+Widening reconciliation's scope to include records without notes SHALL NOT
+change this: those documents are matched against the same single listing, so
+the cost of covering them is bounded by what is already being read.
+
 #### Scenario: Reconciling many documents
 - **WHEN** reconciliation runs for a vault holding twenty submitted documents
 - **THEN** the remote is listed once and all twenty are matched against that one result
 
+#### Scenario: Reconciling documents with and without notes together
+- **WHEN** reconciliation runs for a vault holding some documents with notes and some stored records without them
+- **THEN** all of them are matched against one listing of the remote, not one request per record
+
 #### Scenario: A reconciliation that cannot complete
 - **WHEN** the listing does not succeed
 - **THEN** no document's stored state is changed, and the caller is told the reconciliation failed rather than receiving states resolved from partial data
+
+### Requirement: Correcting a record's state never discards what only a submit establishes
+When reconciliation updates a stored record, it SHALL correct the fields the
+remote is authoritative for — the document's state, its merge request and its
+branch — and SHALL carry forward the fields only a successful submit or import
+establishes, specifically the document's remote path and its edit baseline.
+
+This holds for a record whose note is absent exactly as for one whose note is
+present. The remote path is what a later restore uses to put the note back, so
+discarding it while correcting a state would break recovery in the course of
+fixing a listing.
+
+#### Scenario: A record's state is corrected
+- **WHEN** reconciliation finds a stored record's state is out of date
+- **THEN** the state, merge request and branch are updated, and the stored remote path and edit baseline are left as they were
+
+#### Scenario: An orphaned record is corrected
+- **WHEN** reconciliation corrects a record whose note is no longer in the vault
+- **THEN** its remote path survives the correction, so the document can still be restored to where it came from
 
 ### Requirement: An open document with unresolved review threads is in changes-requested
 This capability SHALL resolve a document with an open merge request as
@@ -367,3 +424,109 @@ writes at creation and first submit.
 #### Scenario: A document named like a placeholder
 - **WHEN** the remote holds a file named `_placeholder.md` that carries a front matter block
 - **THEN** it is offered, because exclusion is decided by the absence of front matter and never by the filename
+
+### Requirement: The edit baseline describes what the plugin last wrote
+Every operation that writes a tracked note's content on the author's behalf
+SHALL record, against that document, a baseline describing the note as it
+stands after that write. A document whose note has not changed since the
+plugin last wrote it SHALL NOT be reported as edited.
+
+The baseline SHALL be captured from a source that reflects the completed
+write rather than from a cached view of the file, since a baseline sampled
+before the write lands is indistinguishable from a note the author has since
+edited.
+
+The baseline is a fact about the NOTE and not about the review. Recording it
+SHALL NOT change a document's state, its branch, or its remote path.
+
+A document with no baseline SHALL be reported as not edited. Absence means
+nothing has been established, and reporting an unestablished difference would
+raise every previously published document at once.
+
+#### Scenario: A note is submitted and not touched afterwards
+- **WHEN** a document is submitted and its note is not edited afterwards
+- **THEN** the document is not reported as edited
+
+#### Scenario: A note is edited after being submitted
+- **WHEN** the author edits a note after its document was submitted
+- **THEN** the document is reported as edited
+
+#### Scenario: A note is reset to the version under review
+- **WHEN** a document under review is reset, so its note is replaced with the content that document carries on its own tracked branch
+- **THEN** the document is not reported as edited, because the note now matches what the plugin last wrote
+
+#### Scenario: A note is edited after being reset
+- **WHEN** the author edits a note after resetting it
+- **THEN** the document is reported as edited again
+
+#### Scenario: A document imported from the platform
+- **WHEN** a document is imported and its note is not edited afterwards
+- **THEN** the document is not reported as edited
+
+#### Scenario: A record written before baselines existed
+- **WHEN** a document's stored record carries no baseline
+- **THEN** the document is reported as not edited, rather than edited
+
+### Requirement: A record says which project it belongs to
+A persisted record SHALL carry the project it was written against, identified
+by the platform's address together with that project's canonical numeric
+identifier. The address is part of the identity because the same namespace path
+on two instances is two unrelated projects. The canonical identifier is used
+rather than whatever the author typed, because the connection details accept
+either a numeric identifier or a namespace path, and the same project configured
+both ways SHALL NOT read as two.
+
+A record whose project is NOT KNOWN SHALL NOT be treated as belonging to the
+configured project. Absence means nothing has been established, and assuming
+otherwise is the error this requirement exists to prevent.
+
+A record SHALL be stamped with a project only when the remote has CONFIRMED the
+document lives there — that is, when reconciliation matches its `doc_id` to a
+merge request on the configured project. It SHALL NOT be stamped on the grounds
+that a project happens to be configured.
+
+#### Scenario: A submission records where it was submitted
+- **WHEN** a document is submitted successfully
+- **THEN** its record carries the address and canonical identifier of the project it was submitted to
+
+#### Scenario: A record is stamped when the remote confirms it
+- **WHEN** reconciliation matches a record's `doc_id` to a merge request on the configured project, and that record carries no project yet
+- **THEN** the record is stamped with that project, because the match establishes that the document lives there
+
+#### Scenario: A record is not stamped merely because a project is configured
+- **WHEN** a record carries no project and reconciliation finds no merge request for its `doc_id` on the configured project
+- **THEN** the record is left unstamped, rather than being assumed to belong to the project currently configured
+
+#### Scenario: The same project configured two ways
+- **WHEN** the connection details are changed from a project's numeric identifier to its namespace path, or the reverse, without changing which project is meant
+- **THEN** records stamped with that project still match, because both forms resolve to the same canonical identifier
+
+#### Scenario: The same path on a different platform
+- **WHEN** records were written against a project path on one platform address, and the plugin is pointed at the same path on a different address
+- **THEN** those records do not match the configured project
+
+### Requirement: A record that does not belong to the configured project resolves to no state
+A document whose record carries a different project than the configured one, or
+carries none, SHALL resolve to no state rather than to the state that record
+holds. The stored state describes a review on a platform or project this plugin
+is not looking at, and presenting it would assert something about the configured
+project that nothing established.
+
+Where a document's state cannot be resolved from the remote, the stored record
+SHALL be consulted only if it belongs to the configured project. That fallback
+exists so an imported document reads as published — it has no merge request, so
+the record is the only thing that knows — and it SHALL NOT be extended to a
+record whose project is foreign or unknown, because those are the same
+observation for a different reason.
+
+#### Scenario: An imported document with no merge request
+- **WHEN** a document's record belongs to the configured project and the remote reports no merge request for it, because it was imported rather than submitted
+- **THEN** it resolves to the state its record holds, as it does today
+
+#### Scenario: A document whose record belongs to another project
+- **WHEN** a document's record carries a project other than the configured one
+- **THEN** it resolves to no state, and no stored state is shown for it
+
+#### Scenario: A document whose record carries no project yet
+- **WHEN** a document's record carries no project and the remote reports no merge request for it on the configured project
+- **THEN** it resolves to no state, rather than to the state the record holds
