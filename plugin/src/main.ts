@@ -1,6 +1,7 @@
 import { Notice, Plugin, ButtonComponent, ItemView, WorkspaceLeaf } from 'obsidian';
 import type { TFile } from 'obsidian';
 import type { ConnectionDetails, FailureKind } from './git-publishing/gitlab-client';
+import { normalizeHost } from './git-publishing/gitlab-client';
 import { createEmptyConnectionDetails } from './platform-config/connection';
 import { createDocument } from './doc-authoring/create-document';
 // Aliased: the plugin also has a same-named private method for the two entry
@@ -359,8 +360,7 @@ function resetPermissionMessage(detail: string | undefined): string {
  * cosmetic gap, not a functional one, since nothing else here depends on it.
  */
 function mergeRequestUrl(details: ConnectionDetails, mrIid: number): string {
-	const host = details.host.trim().replace(/\/+$/, '');
-	const normalizedHost = /^https?:\/\//i.test(host) ? host : `https://${host}`;
+	const normalizedHost = normalizeHost(details.host);
 	const project = details.projectId.trim().replace(/^\/+/, '').replace(/\/+$/, '');
 	return `${normalizedHost}/${project}/-/merge_requests/${mrIid}`;
 }
@@ -1333,8 +1333,6 @@ class DocsPublisherPlugin extends Plugin {
 	private viewActivating = false;
 
 	async onload(): Promise<void> {
-		console.log('Loading Docs Publisher plugin');
-
 		await this.submissions.load();
 
 		// Editing any connection detail discards the verified result, and the
@@ -1447,7 +1445,6 @@ class DocsPublisherPlugin extends Plugin {
 	}
 
 	onunload(): void {
-		console.log('Unloading Docs Publisher plugin');
 		// Note: We deliberately do NOT call detachLeavesOfType here.
 		// Detaching would destroy the user's layout every time the plugin updates.
 	}
@@ -1676,8 +1673,8 @@ class DocsPublisherPlugin extends Plugin {
 	 */
 	private resetDocument(file: TFile, target: ResettableDocument): void {
 		// Gated up front purely to avoid a wasted request when the control is
-		// stale — `resetDocumentWrite` gates again regardless, which is the
-		// actual enforcement, for the same reason `recoverDocument` does.
+		// stale — `restoreDocument` gates again regardless, which is the
+		// actual enforcement.
 		if (requireAuthoringGate(this.connection, this.connectionState.current) === null) {
 			return;
 		}

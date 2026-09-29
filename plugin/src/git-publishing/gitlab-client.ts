@@ -1548,9 +1548,14 @@ function encodeProject(project: string): string {
 	return /^\d+$/.test(trimmed) ? trimmed : encodeURIComponent(trimmed);
 }
 
+/**
+ * Always https, even when `http://` was typed: the token travels in a header
+ * on every request, so it must never cross the network unencrypted. A server
+ * that only speaks plain http then fails Test connection rather than leaking.
+ */
 function normalizeHost(host: string): string {
-	const trimmed = host.trim().replace(/\/+$/, '');
-	return /^https?:\/\//i.test(trimmed) ? trimmed : `https://${trimmed}`;
+	const bare = host.trim().replace(/\/+$/, '').replace(/^https?:\/\//i, '');
+	return `https://${bare}`;
 }
 
 export {
