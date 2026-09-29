@@ -52,6 +52,21 @@ fi
 # Create plugins directory if it doesn't exist
 mkdir -p "$VAULT_PATH/.obsidian/plugins"
 
+# Preserve the plugin's own data across a reinstall.
+#
+# `data.json` lives INSIDE the plugin folder, so the wipe below took it with
+# it every time. That file is the only local record of what this vault has
+# submitted and imported — and only submissions heal themselves afterwards,
+# by reconciling from each note's `doc_id`. IMPORTED documents have no merge
+# request to reconcile from, so losing it made every imported document read
+# as "Not submitted yet" again (observed 2026-09-22, after a reinstall).
+DATA_BACKUP=""
+if [ -f "$PLUGIN_PATH/data.json" ]; then
+    DATA_BACKUP=$(mktemp)
+    cp "$PLUGIN_PATH/data.json" "$DATA_BACKUP"
+    log_info "Keeping existing plugin data..."
+fi
+
 # Remove old installation if it exists
 if [ -d "$PLUGIN_PATH" ]; then
     log_info "Removing old plugin installation..."
@@ -75,6 +90,13 @@ cp .gitignore "$PLUGIN_PATH/" 2>/dev/null || true
 # Copy src directory
 if [ -d "src" ]; then
     cp -r src "$PLUGIN_PATH/"
+fi
+
+# Put the data back, now that the folder exists again.
+if [ -n "$DATA_BACKUP" ]; then
+    cp "$DATA_BACKUP" "$PLUGIN_PATH/data.json"
+    rm -f "$DATA_BACKUP"
+    log_info "Restored existing plugin data"
 fi
 
 log_success "Plugin installed successfully"
