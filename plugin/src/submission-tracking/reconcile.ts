@@ -1,7 +1,8 @@
 import type { ConnectionDetails, FailureKind, MergeRequestSummary } from '../git-publishing/gitlab-client';
 import { hasUnresolvedThreads, listMergeRequests } from '../git-publishing/gitlab-client';
 import { branchForDocId } from './resolve';
-import type { SubmissionRecord, SubmissionState } from './submission-record';
+import type { ProjectRef, SubmissionRecord, SubmissionState } from './submission-record';
+import { belongsToProject } from './submission-record';
 import type { SubmissionStore } from './submission-store';
 
 /**
@@ -53,7 +54,9 @@ export type ReconcileResult =
 export async function reconcileDocuments(
 	details: ConnectionDetails,
 	store: SubmissionStore,
-	docIds: readonly string[]
+	docIds: readonly string[],
+	/** The project `details` points at — what a matched record is stamped with. */
+	project: ProjectRef
 ): Promise<ReconcileResult> {
 	// ONE listing for every document, matched in memory — `docs/document-
 	// identity.md` §2 and design.md decision 1. Not one query per document:
@@ -84,7 +87,7 @@ export async function reconcileDocuments(
 		documents.push(resolved.document);
 	}
 
-	await writeBack(store, documents);
+	await writeBack(store, documents, project);
 	return { ok: true, documents };
 }
 
@@ -211,9 +214,22 @@ function settledState(state: string): SubmissionState | null {
  * touches `data.json` not at all. Documents that resolved as never submitted
  * write nothing: there is no state to store for the absence of a submission,
  * and a record left over from an earlier one is kept rather than deleted, for
- * the same reason the untouched records above are.
+ * the same reason the untouched records above are. Nor is it stamped: an
+ * unmatched record may belong to another project, and guessing is what
+ * scope-records-to-their-project removed.
+ *
+ * A match STAMPS the record with `project` — the remote just confirmed the
+ * `doc_id` lives there. Except over a record already stamped with a DIFFERENT
+ * project: `doc_id` is unique per repository, not globally
+ * (`docs/document-naming.md`), so a match here is not evidence the note is this
+ * project's when its record already says it is another's. That record is left
+ * whole, so pointing back at its own project finds it intact.
  */
-async function writeBack(store: SubmissionStore, documents: readonly ResolvedDocument[]): Promise<void> {
+async function writeBack(
+	store: SubmissionStore,
+	documents: readonly ResolvedDocument[],
+	project: ProjectRef
+): Promise<void> {
 	const changed: SubmissionRecord[] = [];
 	for (const entry of documents) {
 		if (entry.submission === null) {
@@ -221,6 +237,10 @@ async function writeBack(store: SubmissionStore, documents: readonly ResolvedDoc
 		}
 
 		const stored = store.get(entry.docId);
+		if (stored?.project !== undefined && !belongsToProject(stored, project)) {
+			continue;
+		}
+
 		const record: SubmissionRecord = {
 			docId: entry.docId,
 			branch: branchForDocId(entry.docId),
@@ -233,10 +253,16 @@ async function writeBack(store: SubmissionStore, documents: readonly ResolvedDoc
 			// silently erase a previously-captured path the next time this
 			// document's state changes.
 			path: stored?.path,
+			// Carried forward for the same reason as `path`: only a submit
+			// establishes this baseline, and rebuilding the record without it
+			// would make every document read as edited the next time its state
+			// changed.
+			mtime: stored?.mtime,
+			project,
 		};
 
 		if (
-			stored === undefined ||
+			!belongsToProject(stored, project) ||
 			stored.state !== record.state ||
 			stored.mrIid !== record.mrIid ||
 			stored.branch !== record.branch

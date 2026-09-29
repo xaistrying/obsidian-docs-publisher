@@ -1,11 +1,18 @@
 import { Modal, Notice, Setting } from 'obsidian';
 import type { App, TFile } from 'obsidian';
 import type { ConnectionDetails } from '../git-publishing/gitlab-client';
+import { listRepositoryFiles } from '../git-publishing/gitlab-client';
 import type { ConnectionState } from '../platform-config/connection-state';
+import { captureEditBaseline } from '../submission-tracking/document-status';
+import type { SubmissionStore } from '../submission-tracking/submission-store';
 import { requireAuthoringGate } from './authoring-gate';
+import { attachmentReportMessage, bringAttachments } from './fetch-attachments';
 
 /** The action label the panel's Reset control shows. */
 export const RESET_LABEL = 'Reset';
+
+/** The same write, offered under its own name when the note is gone. */
+export const RESTORE_LABEL = 'Restore';
 
 /**
  * The read refused, told apart because the author's next step differs.
@@ -34,20 +41,30 @@ export const RESET_FAILED_MESSAGE = "This document wasn't reset. Try again.";
 
 export const RESET_DONE_MESSAGE = 'This note now matches the version under review.';
 
+export const RESTORE_DONE_MESSAGE = 'This document is back in your vault.';
+
 /**
- * Replaces an EXISTING note's content with already-read remote content —
- * the mirror of `recoverDocument`, with the guard inverted. Recovery
- * refuses when a note occupies the path, because existence there means
- * something else already claims that identity; Reset REQUIRES one, because
- * the note at that path IS the document and replacing it is the requested
- * action.
+ * The note came back and its images did not, because the listing they would
+ * have been located from could not be read. Says what actually happened —
+ * the document IS back — rather than reporting a failure the author would
+ * read as "nothing happened".
+ */
+export const RESTORE_ATTACHMENTS_FAILED_MESSAGE =
+	"This document came back, but its images couldn't be fetched. Try again later.";
+
+/**
+ * Makes the note at `path` match `content`, whether or not it exists yet.
  *
- * Writes the content verbatim, front matter included, so the note lands
- * byte-identical to what reviewers are looking at. It writes no tracking
- * record, changes no state, and re-asserts no front matter field of its own
- * (design.md decision 5): resetting local content changes nothing about the
- * review, and the front matter contract has the plugin never rewriting
- * those fields after they are frozen.
+ * ONE FUNCTION FOR BOTH DIRECTIONS, merged 2026-09-22 from `resetDocument`
+ * and `recoverDocument`. They differed in exactly one thing — whether a
+ * note at the path was required or forbidden — and in nothing else: same
+ * gate, same verbatim write, same refusal to touch front matter or the
+ * tracking record. Two files meant two places for that to drift.
+ *
+ * The branch that matters is the confirmation. Overwriting destroys local
+ * work, so it asks first, every time. Creating a note that is not there
+ * destroys nothing, so it does not — the author pressed Restore, and there
+ * is nothing to lose.
  *
  * THE CONFIRMATION IS INSIDE THIS FUNCTION, and deliberately not the
  * caller's to remember. This is the only exported overwrite, the modal is
@@ -55,25 +72,86 @@ export const RESET_DONE_MESSAGE = 'This note now matches the version under revie
  * route to the overwrite passes through the confirmation" is a property of
  * the code's shape rather than of every future caller's diligence. That
  * condition is what `openspec/config.yaml`'s amended NO CI PIPELINE
- * decision exempts Reset on: the rule it is exempted from exists to prevent
- * silent loss of local edits, so an unconfirmed Reset would be the exact
- * case that rule forbids. Do not add a "reset without asking" variant.
+ * decision exempts this on: the rule it is exempted from exists to prevent
+ * silent loss of local edits, so an unconfirmed overwrite would be the
+ * exact case that rule forbids. Do not add a variant that skips it.
  *
- * Gated the same way `recoverDocument` and `createDocument` are: hiding the
- * control that offers it is never what enforces the gate.
+ * Writes the content verbatim, front matter included, so the note lands
+ * byte-identical to what reviewers are looking at. It changes no state, no
+ * branch and no path, and re-asserts no front matter field of its own: this
+ * changes nothing about the review.
+ *
+ * It DOES record the edit baseline for `docId`, after either write. The
+ * baseline is a fact about the note, not the review, and the note is now
+ * exactly what the plugin wrote — leaving the old one would report every
+ * reset note as edited, which it did until fix-edited-baseline.
+ * `saveEditBaseline` takes nothing else, so it cannot move the review.
+ *
+ * `ref` is where the content came from, and supplying it is what makes the
+ * document's IMAGES come back too (milestone 9a). Only the CREATE path
+ * fetches them — a note already in the vault has whatever images it had,
+ * and re-fetching them on a reset is not this change's business. Omitting
+ * `ref` restores the text alone; a caller that does not know which ref its
+ * content came from must not guess one, because fetching a document's
+ * images from the wrong point in history is worse than not fetching them.
+ *
+ * Gated the same way `createDocument` is: hiding the control that offers it
+ * is never what enforces the gate.
  */
-export async function resetDocument(
+export async function restoreDocument(
 	app: App,
 	details: ConnectionDetails,
 	state: ConnectionState,
-	file: TFile,
-	content: string
+	store: SubmissionStore,
+	docId: string,
+	path: string,
+	content: string,
+	ref?: string
 ): Promise<boolean> {
 	const gate = requireAuthoringGate(details, state);
 	if (gate === null) {
 		return false;
 	}
 
+	const existing = app.vault.getAbstractFileByPath(path);
+	if (existing !== null) {
+		const written = await overwrite(app, existing as TFile, content);
+		if (written) {
+			await store.saveEditBaseline(docId, await captureEditBaseline(app, path));
+		}
+		return written;
+	}
+
+	try {
+		// The path may nest under folders this vault does not yet have (a
+		// document filed deep in the corpus's own hierarchy, never seen
+		// locally before). `createFolder` creates every missing intermediate
+		// folder, so this is skipped only when the exact target folder
+		// already exists — calling it again would throw.
+		const folderPath = path.slice(0, path.lastIndexOf('/'));
+		if (folderPath !== '' && app.vault.getAbstractFileByPath(folderPath) === null) {
+			await app.vault.createFolder(folderPath);
+		}
+
+		const created = await app.vault.create(path, content);
+		await app.workspace.getLeaf(false).openFile(created);
+	} catch {
+		new Notice(RESET_FAILED_MESSAGE);
+		return false;
+	}
+
+	await store.saveEditBaseline(docId, await captureEditBaseline(app, path));
+	new Notice(RESTORE_DONE_MESSAGE);
+
+	if (ref !== undefined) {
+		await restoreAttachments(app, details, path, ref);
+	}
+
+	return true;
+}
+
+/** The overwrite half: confirm, re-check, replace. */
+async function overwrite(app: App, file: TFile, content: string): Promise<boolean> {
 	const confirmed = await confirmReset(app, file);
 	if (!confirmed) {
 		return false;
@@ -95,6 +173,39 @@ export async function resetDocument(
 
 	new Notice(RESET_DONE_MESSAGE);
 	return true;
+}
+
+/**
+ * The images, after the note. Shares `bringAttachments` with Import rather
+ * than having a mechanism of its own — two would be two chances to get it
+ * wrong, and this gap existed in exactly one of them for long enough
+ * already.
+ *
+ * A listing that fails is reported as images that did not arrive, which is
+ * what it means here, rather than as a failure of the restore: the note is
+ * already in the vault and staying there.
+ */
+async function restoreAttachments(
+	app: App,
+	details: ConnectionDetails,
+	path: string,
+	ref: string
+): Promise<void> {
+	const listing = await listRepositoryFiles(details, ref);
+	if (!listing.ok) {
+		new Notice(RESTORE_ATTACHMENTS_FAILED_MESSAGE);
+		return;
+	}
+
+	const report = await bringAttachments(app, details, {
+		notePath: path,
+		ref,
+		remotePaths: listing.value.paths,
+	});
+	const message = attachmentReportMessage(report);
+	if (message !== null) {
+		new Notice(message);
+	}
 }
 
 /**

@@ -4,6 +4,8 @@ import { getDefaultBranch, getFileContent, listRepositoryFiles } from '../git-pu
 import { deriveDocIdFromPath } from '../doc-authoring/doc-id';
 import { hasFrontMatter } from '../doc-authoring/front-matter';
 import { listVaultDocuments } from './document-status';
+import { restorableDocuments } from './reset';
+import { configuredProject } from './submission-record';
 import type { SubmissionStore } from './submission-store';
 import type { ConnectionState } from '../platform-config/connection-state';
 import { grantsAuthoring } from '../platform-config/connection-state';
@@ -339,7 +341,7 @@ class DiscoveryHolder {
 	/**
 	 * Drops one row immediately after it is imported, so it leaves the list
 	 * without waiting for the next full refresh — the note now exists
-	 * locally, so it belongs in "Your documents" instead. Mirrors
+	 * locally, so it is no longer something to import. Mirrors
 	 * `RecoveryHolder.remove`.
 	 */
 	remove(path: string): void {
@@ -397,17 +399,17 @@ export async function refreshDiscoverableDocuments(
 	// exactly as a tracked one does.
 	const vaultPaths = new Set(app.vault.getMarkdownFiles().map((file) => file.path));
 
-	// The recovery list's membership, computed from the same two inputs
-	// `resolveOrphanedRecords` computes it from rather than from its RESULT.
-	// That keeps the two resolutions independent — neither waits on the other,
-	// and the one-file-per-direction split stands — while still agreeing on
-	// which documents belong to which list.
+	// What Restore already offers, asked of Restore itself rather than
+	// re-derived here. This used to be "every record with no note in the
+	// vault", which was right while recovery covered all of them and became a
+	// hole the moment it stopped: Restore excludes PUBLISHED documents
+	// deliberately, because a published document's file is on the default
+	// branch and belongs in THIS list — so excluding it here too made it
+	// appear in neither (2026-09-22). Sharing the rule is what stops the two
+	// lists drifting apart again.
 	const vaultDocIds = new Set(listVaultDocuments(app).map((entry) => entry.docId));
 	const orphanedDocIds = new Set(
-		store
-			.allRecords()
-			.map((record) => record.docId)
-			.filter((docId) => !vaultDocIds.has(docId))
+		restorableDocuments(store, vaultDocIds, configuredProject(details, connection)).map((entry) => entry.docId)
 	);
 
 	holder.beginRefresh();

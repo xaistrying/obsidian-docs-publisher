@@ -14,10 +14,10 @@ import {
 import { EMPTY_REPOSITORY_MESSAGE } from '../platform-config/access-messages';
 import type { ConnectionState } from '../platform-config/connection-state';
 import { resolveDocumentState } from '../submission-tracking/document-state';
-import { listVaultDocuments } from '../submission-tracking/document-status';
+import { captureEditBaseline, listVaultDocuments } from '../submission-tracking/document-status';
 import { branchForDocId, readDocId } from '../submission-tracking/resolve';
-import type { SubmissionState } from '../submission-tracking/submission-record';
-import { SUBMISSION_STATE_LABELS } from '../submission-tracking/submission-record';
+import type { ProjectRef, SubmissionState } from '../submission-tracking/submission-record';
+import { SUBMISSION_STATE_LABELS, projectRef } from '../submission-tracking/submission-record';
 import type { SubmissionStore } from '../submission-tracking/submission-store';
 import { requireAuthoringGate } from './authoring-gate';
 import type { Category } from './categories';
@@ -288,7 +288,7 @@ export function submitForReview(
 async function performSubmit(
 	app: App,
 	details: ConnectionDetails,
-	state: ConnectionState,
+	state: Extract<ConnectionState, { kind: 'verified' }>,
 	file: TFile,
 	result: SubmitModalResult,
 	store: SubmissionStore,
@@ -320,8 +320,12 @@ async function performSubmit(
 	}
 
 	const branch = branchForDocId(docId);
+	// Where every write below goes, so the record left behind says so
+	// (scope-records-to-their-project). The remote writes themselves are the
+	// evidence; nothing is stamped unless they succeed.
+	const project = projectRef(details, state.access);
 	if (existingDocId !== null) {
-		await performResubmit(app, details, file, result, store, docId, branch, completeFields);
+		await performResubmit(app, details, file, result, store, docId, branch, project, completeFields);
 		return;
 	}
 
@@ -375,6 +379,7 @@ async function performSubmit(
 	await openNewCycle(app, details, file, result, store, {
 		docId,
 		branch,
+		project,
 		files,
 		completeFrontMatter: { title: result.title, category: result.category },
 	});
@@ -437,6 +442,7 @@ async function performResubmit(
 	store: SubmissionStore,
 	docId: string,
 	branch: string,
+	project: ProjectRef,
 	/** See `performSubmit`'s parameter of the same name. */
 	completeFields: boolean
 ): Promise<void> {
@@ -520,6 +526,7 @@ async function performResubmit(
 		await openNewCycle(app, details, file, result, store, {
 			docId,
 			branch,
+			project,
 			files,
 			completeFrontMatter,
 		});
@@ -534,6 +541,7 @@ async function performResubmit(
 			await pushUpdate(app, details, file, store, {
 				docId,
 				branch,
+				project,
 				content,
 				state: submission.state,
 				mrIid: submission.mrIid,
@@ -546,6 +554,7 @@ async function performResubmit(
 			await openFreshCycle(app, details, file, result, store, {
 				docId,
 				branch,
+				project,
 				content,
 				completeFrontMatter,
 			});
@@ -578,6 +587,7 @@ async function pushUpdate(
 	params: {
 		docId: string;
 		branch: string;
+		project: ProjectRef;
 		content: string;
 		state: SubmissionState;
 		mrIid: number;
@@ -645,6 +655,11 @@ async function pushUpdate(
 		mrIid: params.mrIid,
 		state: params.state,
 		path: file.path,
+		project: params.project,
+		// Read AFTER any front-matter write above, and from the filesystem
+		// rather than `file.stat`, whose cached mtime can still predate that
+		// write — see `captureEditBaseline`.
+		mtime: await captureEditBaseline(app, file.path),
 	});
 	new Notice(UPDATE_SENT_MESSAGE);
 }
@@ -677,6 +692,7 @@ async function openFreshCycle(
 	params: {
 		docId: string;
 		branch: string;
+		project: ProjectRef;
 		content: string;
 		/** Present only for an imported document's first submit; see `performSubmit`. */
 		completeFrontMatter?: { title: string; category: Category };
@@ -705,6 +721,7 @@ async function openFreshCycle(
 	await openNewCycle(app, details, file, result, store, {
 		docId: params.docId,
 		branch: params.branch,
+		project: params.project,
 		files,
 		completeFrontMatter: params.completeFrontMatter,
 	});
@@ -719,8 +736,11 @@ async function openFreshCycle(
  * `pending` is not optimistic here, unlike the revision path above: the
  * submission was created moments ago, it is open by construction, and it
  * cannot yet carry a review thread. It is what the remote holds.
+ *
+ * Exported for `tests/submit-ordering.test.ts` only, which pins the record-
+ * before-front-matter order without driving the modal and pre-flights.
  */
-async function openNewCycle(
+export async function openNewCycle(
 	app: App,
 	details: ConnectionDetails,
 	file: TFile,
@@ -729,6 +749,8 @@ async function openNewCycle(
 	params: {
 		docId: string;
 		branch: string;
+		/** The project the writes below go to, recorded with them. */
+		project: ProjectRef;
 		/**
 		 * Everything this commit carries — the note first, then the images it
 		 * embeds — each already holding its own verb and, where it updates, its
@@ -764,6 +786,27 @@ async function openNewCycle(
 		return;
 	}
 
+	// RECORDED BEFORE the front matter is written. The branch and merge request
+	// exist now, so the document exists; if the note write below then fails,
+	// what survives must still describe it. Recorded last, a first submit's
+	// note was left with no `doc_id` and no record — a review on the remote that
+	// nothing in the vault could find again (`docs/ce-verification.md` §D0e).
+	// Recorded first, the worst case is a tracked note missing `title` and
+	// `category`, which its next submit collects like any imported note.
+	//
+	// `path` captured going forward as of add-document-recovery — the fast
+	// path every recovery attempt after this one prefers over the
+	// merge-request fallback (that change's design.md decision 1). No baseline
+	// yet: one taken now would describe the note before the write below.
+	await store.save({
+		docId: params.docId,
+		branch: params.branch,
+		mrIid: mergeRequest.value.iid,
+		state: 'pending',
+		path: file.path,
+		project: params.project,
+	});
+
 	if (params.completeFrontMatter !== undefined) {
 		await writeSubmissionFrontMatter(app, file, {
 			title: params.completeFrontMatter.title,
@@ -772,16 +815,9 @@ async function openNewCycle(
 		});
 	}
 
-	// `path` captured going forward as of add-document-recovery — the fast
-	// path every recovery attempt after this one prefers over the
-	// merge-request fallback (that change's design.md decision 1).
-	await store.save({
-		docId: params.docId,
-		branch: params.branch,
-		mrIid: mergeRequest.value.iid,
-		state: 'pending',
-		path: file.path,
-	});
+	// See the sibling write in `pushUpdate`: after the front-matter write, not
+	// before, and from the filesystem.
+	await store.saveEditBaseline(params.docId, await captureEditBaseline(app, file.path));
 	new Notice(SUBMISSION_STATE_LABELS.pending);
 }
 

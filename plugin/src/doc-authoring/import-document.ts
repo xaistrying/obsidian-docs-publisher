@@ -2,15 +2,16 @@ import type { App } from 'obsidian';
 import type { ConnectionDetails } from '../git-publishing/gitlab-client';
 import type { ConnectionState } from '../platform-config/connection-state';
 import type { DiscoverableDocument } from '../submission-tracking/discover';
-import { listVaultDocuments } from '../submission-tracking/document-status';
+import { captureEditBaseline, listVaultDocuments } from '../submission-tracking/document-status';
 import { requireAuthoringGate } from './authoring-gate';
 import { deriveDocIdFromPath } from './doc-id';
 import type { AttachmentFetchReport } from './fetch-attachments';
 import { bringAttachments } from './fetch-attachments';
 import { readContentDocId, withDocId } from './front-matter';
+import { branchForDocId } from '../submission-tracking/resolve';
+import { projectRef } from '../submission-tracking/submission-record';
+import type { SubmissionStore } from '../submission-tracking/submission-store';
 
-/** The action label the panel's two import controls share. */
-export const IMPORT_LABEL = 'Import';
 export const IMPORT_ALL_LABEL = 'Import all';
 
 export const IMPORT_OCCUPIED_MESSAGE = 'A note already exists at this location, so nothing was imported.';
@@ -120,7 +121,8 @@ export async function importDocument(
 	details: ConnectionDetails,
 	state: ConnectionState,
 	document: DiscoverableDocument,
-	source: { ref: string; remotePaths: readonly string[] }
+	source: { ref: string; remotePaths: readonly string[] },
+	store: SubmissionStore
 ): Promise<ImportOutcome> {
 	const gate = requireAuthoringGate(details, state);
 	if (gate === null) {
@@ -183,6 +185,31 @@ export async function importDocument(
 		notePath: document.path,
 		ref: source.ref,
 		remotePaths: source.remotePaths,
+	});
+
+	// WHAT THE REMOTE WILL NEVER SAY, recorded because only this moment knows
+	// it: that this document is already in the knowledge base. Nothing else
+	// can work it out afterwards — reconciliation asks about merge requests,
+	// and an imported document has none, so without this it resolves as
+	// "never submitted" and the panel lists it as work the author owes
+	// (2026-09-22: every one of 25 imported documents landed in "Your
+	// documents" for exactly that reason).
+	//
+	// `published` is the honest state: the file is on the default branch,
+	// which is what published means here. `mtime` is the baseline that makes
+	// a later edit visible. No `mrIid`, because there is no merge request —
+	// see `SubmissionRecord`.
+	await store.save({
+		docId,
+		branch: branchForDocId(docId),
+		state: 'published',
+		path: document.path,
+		mtime: await captureEditBaseline(app, document.path),
+		// The file was just read from this project's default branch, which is
+		// evidence it lives here — and the ONLY evidence an imported document
+		// ever gets, since no merge request will match it. Unstamped, it would
+		// never read published again (scope-records-to-their-project).
+		project: projectRef(details, gate.access),
 	});
 
 	// Deliberately does NOT open the imported note. "Import all" over a

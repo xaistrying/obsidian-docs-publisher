@@ -2,15 +2,24 @@ import type { ConnectionDetails, FailureKind } from '../git-publishing/gitlab-cl
 import { getFileContent, getMergeRequestChangedPath } from '../git-publishing/gitlab-client';
 import type { ResolvedDocument } from './reconcile';
 import { branchForDocId } from './resolve';
+import type { ProjectRef } from './submission-record';
+import { belongsToProject } from './submission-record';
+import type { SubmissionStore } from './submission-store';
 
 /**
- * `recover.ts` answers "where can a document the vault has lost be read
- * from" — a question about a `doc_id` with no note. This answers the
- * narrower one Reset asks: "what does the note I am looking at say on the
- * ref reviewers are reading it from". Same three-way content shape, one
- * fewer ref, and kept in its own file for the same reason `recover.ts` is
- * kept out of `reconcile.ts`: one file per direction of "what does the
- * remote know" (add-document-recovery design.md decision 6).
+ * One question, asked two ways: "what does this document say on the ref
+ * reviewers are reading it from". Reset asks it about a note in the vault;
+ * Restore asks it about a record whose note is gone. Both answer by reading
+ * the document's own branch, which is why they share one read.
+ *
+ * REPLACED `recover.ts` on 2026-09-22, which asked a wider question and
+ * carried three things to answer it: a stored-path fast path, a
+ * changed-path fallback for records written before that field existed, and
+ * a default-branch fallback for a PUBLISHED document whose branch was
+ * deleted. Import made the last one redundant — a published document with
+ * no local note is a file on the default branch this vault lacks, which is
+ * exactly what Discover lists — and with it went the `unrecoverable` state
+ * and the whole remote round trip the list needed to be built at all.
  */
 
 /**
@@ -51,8 +60,66 @@ export function resettableDocument(document: ResolvedDocument | null): Resettabl
 	return { docId: document.docId, mrIid };
 }
 
+/**
+ * Every tracked document whose note is no longer in the vault and whose
+ * content is still reachable — the list the panel offers Restore from.
+ *
+ * PURELY LOCAL: stored records minus the vault's `doc_id`s, computed from
+ * data this process already holds. Nothing here reaches the remote, which
+ * is the point — the list this replaced needed one request per record just
+ * to decide whether a row could be offered, and dragged its own refresh
+ * lifecycle and failure states through the panel to do it.
+ *
+ * ONLY DOCUMENTS UNDER ACTIVE REVIEW, which is what makes this list empty
+ * itself. Every document here leaves on its own: the review ends and it
+ * becomes published (Discover covers it — the file is on the default branch
+ * and this vault has no note at its path, which is Discover's definition) or
+ * not accepted (it drops out entirely).
+ *
+ * That holds ONLY because refresh reconciles every stored record, not just
+ * the vault's notes (correct-stale-records). Before 2026-09-29 it reconciled
+ * notes alone, so the records here — by definition the ones with no note —
+ * were never re-asked, their state never left `pending`, and the claim above
+ * was false for exactly the documents it described (`docs/ce-verification.md`
+ * §D0f). Narrow that refresh again and this list stops emptying.
+ *
+ * `closed` was in this list until 2026-09-22 and was removed for that
+ * reason. Nothing in this plugin deletes a stored record — reconciliation
+ * deliberately never does — so a not-accepted document whose note the author
+ * deleted BECAUSE THEY HAD ABANDONED IT would sit here forever with no way
+ * to dismiss it. An author who turns down their own rejected draft and
+ * starts again should not be nagged about it for the life of the vault.
+ *
+ * What that gives up: recovering a rejected note deleted by accident. The
+ * escape hatch is the one the closed review already provides — its content
+ * is readable in GitLab — and paying for that rare case with a permanent
+ * row in everyone else's panel is the wrong trade.
+ */
+export function restorableDocuments(
+	store: SubmissionStore,
+	vaultDocIds: ReadonlySet<string>,
+	/**
+	 * Only records belonging here are offered: a Restore reads content from the
+	 * record's merge request, and one from another project names a review this
+	 * project does not have (scope-records-to-their-project).
+	 */
+	project: ProjectRef | null
+): ResettableDocument[] {
+	return store
+		.allRecords()
+		.filter(
+			(record) =>
+				belongsToProject(record, project) &&
+				(record.state === 'pending' || record.state === 'changes-requested') &&
+				record.mrIid !== undefined &&
+				!vaultDocIds.has(record.docId)
+		)
+		.map((record) => ({ docId: record.docId, mrIid: record.mrIid as number }))
+		.sort((a, b) => a.docId.localeCompare(b.docId));
+}
+
 export type ResetContentResult =
-	| { kind: 'found'; content: string }
+	| { kind: 'found'; content: string; path: string }
 	| { kind: 'absent' }
 	| { kind: 'failed'; failure: FailureKind; detail?: string };
 
@@ -101,7 +168,12 @@ export async function fetchResetContent(
 		return failed(onBranch);
 	}
 
-	return onBranch.value.exists ? { kind: 'found', content: onBranch.value.content } : { kind: 'absent' };
+	// The path comes back with the content because Restore needs somewhere to
+	// CREATE the note, and this read is the only thing that knows where that
+	// is. Reset ignores it — it already has the note.
+	return onBranch.value.exists
+		? { kind: 'found', content: onBranch.value.content, path: path.value }
+		: { kind: 'absent' };
 }
 
 /**

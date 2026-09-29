@@ -75,37 +75,30 @@
 	white-space: nowrap;
 }
 
+/* The state and the unsent-edits marker, kept together as one unit: the row
+   may wrap BETWEEN units, never between these two, so the marker cannot end
+   up beside the link instead of the state it qualifies. */
+.docs-publisher-document-labels {
+	display: inline-flex;
+	gap: var(--size-4-2);
+	white-space: nowrap;
+}
+
+/* The marker itself. Warning rather than accent: in many themes the accent IS
+   the link colour, and a marker that looks like "Open in GitLab" reads as
+   something to click. */
+.docs-publisher-document-edited {
+	color: var(--text-warning);
+}
+
 .docs-publisher-document-link {
 	font-size: var(--font-ui-smaller);
 	white-space: nowrap;
 }
 
-/* "Other documents" — published and not-accepted documents still in the
-   vault. Lower prominence than "Your documents" above it, not hidden: the
-   author should be able to see that a document exists and where it stands
-   without it competing with the list they check for work. Muted heading,
-   smaller rows, and extra space above so the two read as separate lists
-   rather than one long one. */
-.docs-publisher-documents-secondary {
-	margin-top: var(--size-4-6);
-}
-
-.docs-publisher-documents-secondary h4 {
-	margin: 0;
-	color: var(--text-muted);
-	font-size: var(--font-ui-small);
-	font-weight: var(--font-normal);
-}
-
-.docs-publisher-documents-secondary .docs-publisher-document-name {
-	color: var(--text-muted);
-	font-size: var(--font-ui-smaller);
-}
-
 /* "Documents you can import" — documents the remote has that this vault does
-   not. Sits below both lists of documents the author already has, separated
-   by the same extra space "Other documents" uses, so the three read as three
-   lists rather than one long one. Rows carry a full remote path rather than a
+   not. Sits below the lists of documents the author already has, separated
+   by extra space so they read as separate lists rather than one long one. Rows carry a full remote path rather than a
    filename, so the name column is allowed to wrap onto its own line and the
    Import button stays put at the right. */
 .docs-publisher-documents-discover {
@@ -168,10 +161,14 @@
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	white-space: nowrap;
+	/* Pushed to the row's trailing edge, the way Obsidian's own backlinks
+	   pane shows a section count, rather than hugging the heading. Where the
+	   row also holds a control (Refresh), the count lands just inside it. */
+	margin-left: auto;
 }
 
 /* A section's own action row, under its heading and description rather than
-   beside the heading. "Your documents" keeps Refresh on the heading line
+   beside the heading. "Needs you" keeps Refresh on the heading line
    because that title is short; "Documents you can import" is long enough that
    a button beside it wrapped the title across two lines to make room.
 

@@ -14,16 +14,37 @@ export interface ConnectionHolder {
 const CHECKING_MESSAGE = 'Checking…';
 const EMPTY_FIELDS_MESSAGE = 'Fill in all three fields before testing the connection.';
 
+/**
+ * The refused-for-a-permission variant, naming the permission GitLab itself
+ * reported rather than sending the author to check a project path that is
+ * very likely correct (`docs/ce-verification.md` §D0g).
+ *
+ * The parenthetical is dropped when no name came back, for the same reason
+ * the panel's equivalents drop it: an invented name would send someone to
+ * tick the wrong box.
+ */
+function connectionPermissionMessage(detail: string | undefined): string {
+	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
+	return (
+		`Your access token doesn't have permission to check your connection${missing}. ` +
+		'Ask your admin to add it.'
+	);
+}
+
 const FAILURE_MESSAGES: Record<FailureKind, string> = {
 	'rejected-credential': 'Your access has expired or is incorrect. Please ask your admin to set it up again.',
 	'not-reachable':
 		'That project could not be found, or your access does not include it. Check the project ID above.',
 	'server-unreachable':
 		'Could not reach GitLab at that address. Check the address above and your connection, then try again.',
-	// Unreachable from "Test connection" itself — this check only reads, and
-	// insufficient-permission is produced solely by git-publishing's write
-	// methods. Present for the table's exhaustiveness, not for display here.
-	'insufficient-permission': "Your access token doesn't have permission to do that. Ask your admin to add it.",
+	// REACHABLE as of 2026-09-29, and it was not before: the identity read is
+	// now classified as scoped, so a token missing `User: Read` lands here
+	// instead of on `not-reachable`'s "that project could not be found".
+	// `statusText` prefers `connectionPermissionMessage` below, which names
+	// the permission; this entry is the fallback for a refusal that names
+	// none.
+	'insufficient-permission':
+		"Your access token doesn't have permission to check your account. Ask your admin to add it.",
 	// Unreachable from "Test connection" for the same reason as the entry
 	// above: this check only reads, and content-changed is produced solely by
 	// a refused write. Present for the table's exhaustiveness.
@@ -92,8 +113,41 @@ class ConnectionSettingTab extends PluginSettingTab {
 		new Setting(containerEl)
 			.setName('Access token')
 			.setDesc(
-				'Create a fine-grained access token in GitLab, under User settings → Access tokens. ' +
-					'The exact permissions it needs are assigned by your admin.'
+				// Named, rather than left to an admin to guess, as of the
+				// 2026-09-22 verification run. This used to say "the exact
+				// permissions it needs are assigned by your admin", which was
+				// honest only because nobody knew them: GitLab exposes no
+				// endpoint reporting what a fine-grained token holds, so the
+				// list could only be learned by making each call against a
+				// deliberately under-scoped token and reading what the refusal
+				// named. That was done against the target instance, and the
+				// eight below are the complete set — each one confirmed
+				// necessary by a refusal, and the set confirmed sufficient by a
+				// run in which every call succeeded holding nothing else. See
+				// `docs/ce-verification.md` §A2.10.
+				//
+				// Grouped by the token screen's own tabs and worded to be
+				// forwarded verbatim to whoever creates the token. The User tab
+				// is called out because it is the one an author reading a list
+				// of "project permissions" will miss, and `User: Read` is what
+				// the FIRST call of Test connection needs — so missing it fails
+				// at step one, before anything else has been tried.
+				createFragment((desc) => {
+					desc.appendText(
+						'Create a fine-grained access token in GitLab, under User settings → ' +
+							'Access tokens, and tick exactly these:'
+					);
+					const list = desc.createEl('ul');
+					list.createEl('li', {
+						text:
+							'Group and project — Project (Read), Repository (Read), ' +
+							'Branch (Read, Delete), Commit (Create), Merge Request (Read, Create)',
+					});
+					list.createEl('li', {
+						text: 'User — User (Read). This is on the separate User tab, and is easy to miss.',
+					});
+					desc.appendText('Nothing else is needed.');
+				})
 			)
 			.addText((text) => {
 				text.inputEl.type = 'password';
@@ -159,13 +213,23 @@ class ConnectionSettingTab extends PluginSettingTab {
 		try {
 			const identity = await getCurrentUser(details);
 			if (!identity.ok) {
-				state.set({ kind: 'failed', failure: identity.failure, identity: null });
+				state.set({
+					kind: 'failed',
+					failure: identity.failure,
+					identity: null,
+					detail: identity.detail,
+				});
 				return;
 			}
 
 			const access = await getProjectAccess(details);
 			if (!access.ok) {
-				state.set({ kind: 'failed', failure: access.failure, identity: identity.value });
+				state.set({
+					kind: 'failed',
+					failure: access.failure,
+					identity: identity.value,
+					detail: access.detail,
+				});
 				return;
 			}
 
@@ -200,7 +264,9 @@ class ConnectionSettingTab extends PluginSettingTab {
 			case 'verified':
 				return `Connected as ${state.identity.name} — ${state.access.accessLabel} access`;
 			case 'failed':
-				return FAILURE_MESSAGES[state.failure];
+				return state.failure === 'insufficient-permission'
+					? connectionPermissionMessage(state.detail)
+					: FAILURE_MESSAGES[state.failure];
 		}
 	}
 

@@ -5,6 +5,12 @@ import type { FailureKind, Identity, ProjectAccess } from '../git-publishing/git
  * only. Never persisted: it describes details that are themselves
  * session-scoped, so it must not outlive them.
  *
+ * `detail` carries the permission name GitLab itself reported, for a failure
+ * that names one. It is optional because most failures do not: a wrong
+ * address names nothing, and an invented name would send someone to tick the
+ * wrong box. Added 2026-09-29 for `docs/ce-verification.md` §D0g — the
+ * identity read's refusal DOES name one, and there was nowhere to put it.
+ *
  * "Connected fine, but the role grants nothing" is deliberately not a fifth
  * kind — it is `verified` with an access level below the threshold below.
  * The connection genuinely succeeded, and modelling it as a failure would
@@ -15,7 +21,7 @@ export type ConnectionState =
 	| { kind: 'unverified' }
 	| { kind: 'checking' }
 	| { kind: 'verified'; identity: Identity; access: ProjectAccess }
-	| { kind: 'failed'; failure: FailureKind; identity: Identity | null };
+	| { kind: 'failed'; failure: FailureKind; identity: Identity | null; detail?: string };
 
 /**
  * The lowest access level that can read the project's documents. Planner is

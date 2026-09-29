@@ -32,7 +32,7 @@ const SOURCE = { ref: 'main', remotePaths: [] };
 const VERIFIED: ConnectionState = {
 	kind: 'verified',
 	identity: { id: 1, name: 'Ivan', username: 'ivan' },
-	access: { accessLevel: 30, accessLabel: 'Developer' },
+	access: { id: 42, accessLevel: 30, accessLabel: 'Developer' },
 };
 
 /**
@@ -85,6 +85,11 @@ function vault(params: { notes?: Record<string, string | null>; folders?: string
 	return { app, created, createdFolders };
 }
 
+function store() {
+	const saved: unknown[] = [];
+	return { save: async (r: unknown) => void saved.push(r), allRecords: () => [], saved } as never;
+}
+
 describe('importing a discovered document', () => {
 	it('writes the note at exactly its remote path, creating missing folders', async () => {
 		const { app, created, createdFolders } = vault({});
@@ -92,7 +97,7 @@ describe('importing a discovered document', () => {
 		const outcome = await importDocument(app, DETAILS, VERIFIED, {
 			path: 'Products/Barcode-Scanner/SOPs/BS-SOP-001_Help-Customer-Setup.md',
 			content: '---\ntitle: "Help Customer Setup"\n---\n\nSteps.\n',
-		}, SOURCE);
+		}, SOURCE, store());
 
 		expect(outcome.ok).toBe(true);
 		expect(created.map((entry) => entry.path)).toEqual([
@@ -111,7 +116,7 @@ describe('importing a discovered document', () => {
 		await importDocument(app, DETAILS, VERIFIED, {
 			path: 'Known-errors/SBT-KE-001_EG95-mTLS-Socket.md',
 			content: '---\ntitle: "EG95 mTLS"\n---\n',
-		}, SOURCE);
+		}, SOURCE, store());
 
 		expect(created[0].content).toContain(`doc_id: ${deriveDocId('SBT-KE-001_EG95-mTLS-Socket')}`);
 		expect(created[0].content).toContain('doc_id: SBT-KE-001_EG95-mTLS-Socket');
@@ -123,7 +128,7 @@ describe('importing a discovered document', () => {
 		await importDocument(app, DETAILS, VERIFIED, {
 			path: 'Huong-dan/HD-001_Cài-đặt-thiết-bị.md',
 			content: '---\ntitle: "Cài đặt"\n---\n',
-		}, SOURCE);
+		}, SOURCE, store());
 
 		expect(created[0].content).toContain(`doc_id: ${deriveDocId('HD-001_Cài-đặt-thiết-bị')}`);
 		expect(created[0].content).toContain('doc_id: HD-001_Cai-dat-thiet-bi');
@@ -137,7 +142,7 @@ describe('importing a discovered document', () => {
 		const content =
 			'---\ntitle: "Update Device Details"\nowner: ivan\nlast_reviewed: 2025-11-02\n---\n\n# Steps\n\nOne.\n';
 
-		await importDocument(app, DETAILS, VERIFIED, { path: 'SOPs/BOA-SOP-001.md', content }, SOURCE);
+		await importDocument(app, DETAILS, VERIFIED, { path: 'SOPs/BOA-SOP-001.md', content }, SOURCE, store());
 
 		expect(created[0].content).toBe(
 			'---\ntitle: "Update Device Details"\nowner: ivan\nlast_reviewed: 2025-11-02\n' +
@@ -152,7 +157,7 @@ describe('importing a discovered document', () => {
 		const { app, created } = vault({});
 		const content = '---\ntitle: "Setup"\ndoc_id: LEGACY-ID-007\n---\n\nSteps.\n';
 
-		await importDocument(app, DETAILS, VERIFIED, { path: 'Guides/Renamed-Since.md', content }, SOURCE);
+		await importDocument(app, DETAILS, VERIFIED, { path: 'Guides/Renamed-Since.md', content }, SOURCE, store());
 
 		expect(created[0].content).toBe(content);
 	});
@@ -167,7 +172,7 @@ describe('what import refuses, before writing anything', () => {
 		const outcome = await importDocument(app, DETAILS, VERIFIED, {
 			path: 'Guides/Guides-Setup.md',
 			content: '---\ntitle: "Setup"\n---\n',
-		}, SOURCE);
+		}, SOURCE, store());
 
 		expect(outcome).toEqual({
 			ok: false,
@@ -184,7 +189,7 @@ describe('what import refuses, before writing anything', () => {
 		const outcome = await importDocument(app, DETAILS, VERIFIED, {
 			path: 'Guides/Setup.md',
 			content: '---\ntitle: "Setup"\n---\n',
-		}, SOURCE);
+		}, SOURCE, store());
 
 		expect(outcome).toEqual({
 			ok: false,
@@ -200,7 +205,7 @@ describe('what import refuses, before writing anything', () => {
 		const outcome = await importDocument(app, DETAILS, VERIFIED, {
 			path: 'Guides/Setup Guide v2.md',
 			content: '---\ntitle: "Setup"\n---\n',
-		}, SOURCE);
+		}, SOURCE, store());
 
 		expect(outcome.ok).toBe(false);
 		expect(created).toEqual([]);
@@ -211,13 +216,13 @@ describe('what import refuses, before writing anything', () => {
 		const reporter: ConnectionState = {
 			kind: 'verified',
 			identity: { id: 1, name: 'Ivan', username: 'ivan' },
-			access: { accessLevel: 20, accessLabel: 'Reporter' },
+			access: { id: 42, accessLevel: 20, accessLabel: 'Reporter' },
 		};
 
 		const outcome = await importDocument(app, DETAILS, reporter, {
 			path: 'Guides/Setup.md',
 			content: '---\ntitle: "Setup"\n---\n',
-		}, SOURCE);
+		}, SOURCE, store());
 
 		expect(outcome.ok).toBe(false);
 		expect(created).toEqual([]);
@@ -243,7 +248,8 @@ describe('the names a document ID can be derived from', () => {
 				path: 'Products/Smart Buddy POS/SOPs/SB-SOP-001_Terminal-Offline (SAMPLE).md',
 				content: '---\ntitle: "Sample"\n---\n',
 			},
-			SOURCE
+			SOURCE,
+			store()
 		);
 
 		expect(outcome.ok).toBe(false);
@@ -261,7 +267,8 @@ describe('the names a document ID can be derived from', () => {
 				path: 'Products/SOPs/SB-SOP-001_Terminal-Offline(SAMPLE).md',
 				content: '---\ntitle: "Sample"\n---\n',
 			},
-			SOURCE
+			SOURCE,
+			store()
 		);
 
 		expect(outcome.ok).toBe(true);
@@ -278,7 +285,8 @@ describe('the names a document ID can be derived from', () => {
 			DETAILS,
 			VERIFIED,
 			{ path: 'Products/Barcode-Scanner/README.md', content: '---\ntitle: "Readme"\n---\n' },
-			SOURCE
+			SOURCE,
+			store()
 		);
 
 		expect(outcome).toEqual({

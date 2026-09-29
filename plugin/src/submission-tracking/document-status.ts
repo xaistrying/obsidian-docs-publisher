@@ -1,4 +1,6 @@
 import type { App, TFile } from 'obsidian';
+import type { EditBaseline, ProjectRef, SubmissionRecord, SubmissionState } from './submission-record';
+import { belongsToProject, configuredProject } from './submission-record';
 import type { ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
 import type { ConnectionState } from '../platform-config/connection-state';
 import { grantsDocumentAccess } from '../platform-config/connection-state';
@@ -154,7 +156,8 @@ export async function refreshDocumentStatuses(
 	// call will succeed (`docs/gitlab-roles.md` §1). Below it there is nothing
 	// to read, so no request is made and no outcome is recorded: an author
 	// who cannot see the project's documents is not told a refresh failed.
-	if (!grantsDocumentAccess(connection)) {
+	const project = configuredProject(details, connection);
+	if (!grantsDocumentAccess(connection) || project === null) {
 		return;
 	}
 
@@ -164,20 +167,26 @@ export async function refreshDocumentStatuses(
 		return;
 	}
 
-	const documents = listVaultDocuments(app);
-	if (documents.length === 0) {
-		// Nothing carries a `doc_id`, so there is nothing to ask about. An
-		// empty vault costs no request.
+	// The vault's `doc_id`s AND every stored record's. A record whose note was
+	// deleted is the one nothing else in the vault describes, and leaving it out
+	// froze its state at whatever the last submit wrote — a merged document then
+	// sat on the restore list forever and was hidden from import
+	// (`docs/ce-verification.md` §D0f). Same single listing either way.
+	const docIds = [
+		...new Set([
+			...listVaultDocuments(app).map((entry) => entry.docId),
+			...store.allRecords().map((record) => record.docId),
+		]),
+	];
+	if (docIds.length === 0) {
+		// No note carries a `doc_id` and no record exists, so there is nothing
+		// to ask about. That costs no request.
 		holder.recordSuccess([]);
 		return;
 	}
 
 	holder.beginRefresh();
-	const result = await reconcileDocuments(
-		details,
-		store,
-		documents.map((entry) => entry.docId)
-	);
+	const result = await reconcileDocuments(details, store, docIds, project);
 
 	if (!result.ok) {
 		holder.recordFailure(result.failure, result.detail);
@@ -188,3 +197,135 @@ export async function refreshDocumentStatuses(
 }
 
 export { DocumentStatusHolder };
+
+/**
+ * The edit baseline for the note at `path`, as it stands on disk NOW. Call
+ * it after the plugin's own write has completed; it is the only producer of
+ * an `EditBaseline`.
+ *
+ * Read from the adapter — the filesystem — and deliberately not from
+ * `TFile.stat`. That is Obsidian's cached stat, and immediately after a write
+ * it can still hold the pre-write mtime, which recorded every submitted
+ * document as edited the moment it was sent (fix-edited-baseline).
+ *
+ * Undefined when the read fails or nothing is at the path: no baseline is
+ * read as not edited, which is safer than guessing one.
+ */
+export async function captureEditBaseline(app: App, path: string): Promise<EditBaseline | undefined> {
+	try {
+		const stat = await app.vault.adapter.stat(path);
+		return stat === null ? undefined : (stat.mtime as EditBaseline);
+	} catch {
+		return undefined;
+	}
+}
+
+/**
+ * The state a document is shown in: the remote's answer when it has one, and
+ * otherwise the stored record's — but ONLY a record belonging to `project`.
+ *
+ * The fallback exists for an imported document, which has no merge request and
+ * so nothing for the remote to report. "No merge request here" is the same
+ * observation for a record written against another project, and falling back
+ * for that one resurrected its old state after every refresh
+ * (`docs/ce-verification.md` §D0h). Undefined is no state: the row shows no
+ * label and the panel offers only a first submission.
+ *
+ * The one rule the row, the partition and the submit action all read, so the
+ * label and the action cannot come from two answers again.
+ */
+export function effectiveState(
+	status: ResolvedDocument | null,
+	record: SubmissionRecord | undefined,
+	project: ProjectRef | null
+): SubmissionState | undefined {
+	return status?.submission?.state ?? (belongsToProject(record, project) ? record.state : undefined);
+}
+
+/**
+ * Whether to mark a document as belonging to another project: its record names
+ * one, that is not the configured project, and a refresh has found nothing for
+ * it here. A live answer wins as everywhere else, and before a refresh there is
+ * nothing to say.
+ *
+ * An UNSTAMPED record is never marked. Nothing established where it belongs,
+ * and "another project" would assert exactly that.
+ */
+export function inAnotherProject(
+	status: ResolvedDocument | null,
+	record: SubmissionRecord | undefined,
+	project: ProjectRef | null
+): boolean {
+	return (
+		status !== null &&
+		status.submission === null &&
+		record?.project !== undefined &&
+		project !== null &&
+		!belongsToProject(record, project)
+	);
+}
+
+/**
+ * Whether the note has been changed since the plugin last wrote it — a
+ * submit, an import or a reset, each of which records a baseline.
+ *
+ * FALSE when no baseline exists, which is the load-bearing half. A record
+ * written before `mtime` was captured has nothing to compare against, and
+ * answering "edited" for those would light up every document the author has
+ * ever published the moment this shipped. They earn a baseline on their next
+ * submit and behave normally from then on.
+ */
+export function hasLocalEdits(file: TFile, record: SubmissionRecord | undefined): boolean {
+	return record?.mtime !== undefined && file.stat.mtime > record.mtime;
+}
+
+/**
+ * Whether this document is waiting on the AUTHOR rather than on a reviewer.
+ *
+ * The rule the panel's main list is built from, in one place so the list and
+ * its labels cannot disagree about what belongs in it:
+ *
+ * - never submitted — nothing is in the knowledge base yet
+ * - changes requested — a reviewer asked for something, which is the
+ *   definition of needing the author, edited or not
+ * - not accepted — needs a decision, resubmit or abandon, and no other
+ *   surface would raise it
+ * - pending or published AND edited since the last submit — there is work
+ *   here that the remote has not seen
+ *
+ * Everything else is waiting on somebody else or on nothing: a pending
+ * document nobody has commented on, and a published document the author has
+ * not touched. Those are reference, not work.
+ */
+export function needsAuthor(
+	state: SubmissionState | null,
+	edited: boolean
+): boolean {
+	if (state === null || state === 'changes-requested' || state === 'closed') {
+		return true;
+	}
+
+	return edited;
+}
+
+/** The panel section a listed document belongs in, named for who acts next. */
+export type PanelSection = 'needs-you' | 'waiting-on-reviewers';
+
+/**
+ * Which section a document is listed in, or null for not listed at all.
+ *
+ * Built FROM `needsAuthor`, not beside it, so "Needs you" holds exactly what
+ * that rule says and nothing else can drift from it. Of what is left, only a
+ * pending document has a next actor — a reviewer. A published, untouched one
+ * has none and stays off the panel (2026-09-22).
+ *
+ * An unresolved state goes to "Needs you" by way of `needsAuthor`: putting it
+ * under "Waiting on reviewers" would assert a review nothing established.
+ */
+export function panelSection(state: SubmissionState | null, edited: boolean): PanelSection | null {
+	if (needsAuthor(state, edited)) {
+		return 'needs-you';
+	}
+
+	return state === 'pending' ? 'waiting-on-reviewers' : null;
+}

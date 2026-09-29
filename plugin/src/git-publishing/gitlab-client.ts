@@ -49,6 +49,13 @@ export interface Identity {
 }
 
 export interface ProjectAccess {
+	/**
+	 * The project's canonical numeric id, whichever form — numeric id or
+	 * namespace path — the author configured. It is what a tracking record is
+	 * stamped with, so the same project entered two ways is never two projects
+	 * (scope-records-to-their-project design.md decision 2).
+	 */
+	id: number;
 	/** Null when the project is reachable but carries no role for this account. */
 	accessLevel: number | null;
 	accessLabel: string;
@@ -210,9 +217,29 @@ const ACCESS_LEVEL_NAMES: Record<number, string> = {
 	50: 'Owner',
 };
 
-/** Reads the account the supplied token belongs to. */
+/**
+ * Reads the account the supplied token belongs to.
+ *
+ * Classified as a SCOPED read, unlike its sibling `getProjectAccess`, and the
+ * asymmetry is the point rather than an oversight. `classifyStatus` folds 403
+ * into `not-reachable` so that an invisible project and a missing one read
+ * alike — the plugin must not leak which projects exist. **There is no project
+ * in this request.** `/user` reads the token's own account, so there is
+ * nothing here whose existence could leak, and folding its 403 buys nothing
+ * while costing the permission name GitLab put in the body.
+ *
+ * What that cost looked like, observed 2026-09-29 and recorded as
+ * `docs/ce-verification.md` §D0g: a token missing `User: Read` produced "That
+ * project could not be found, or your access does not include it", sending the
+ * author to check a project path that was correct. `User: Read` is on the
+ * token screen's User tab rather than Group and project, which `A2.10` flags
+ * as the permission most likely to be missed — and this is the FIRST call
+ * "Test connection" makes, so it is the most likely first-run failure there
+ * is.
+ */
 async function getCurrentUser(details: ConnectionDetails): Promise<ClientResult<Identity>> {
-	const result = await get(details, '/user');
+	const raw = await getRaw(details, '/user', classifyScopedStatus);
+	const result: ClientResult<unknown> = raw.ok ? raw : failureFrom(raw);
 	if (!result.ok) {
 		return result;
 	}
@@ -241,11 +268,16 @@ async function getProjectAccess(details: ConnectionDetails): Promise<ClientResul
 		return result;
 	}
 
-	const accessLevel = highestAccessLevel((result.value as { permissions?: unknown }).permissions);
+	const body = result.value as { id?: unknown; permissions?: unknown };
+	if (typeof body.id !== 'number') {
+		return { ok: false, failure: 'unexpected' };
+	}
+
+	const accessLevel = highestAccessLevel(body.permissions);
 	const named = accessLevel === null ? undefined : ACCESS_LEVEL_NAMES[accessLevel];
 	return {
 		ok: true,
-		value: { accessLevel, accessLabel: named === undefined ? 'Unknown' : named },
+		value: { id: body.id, accessLevel, accessLabel: named === undefined ? 'Unknown' : named },
 	};
 }
 
@@ -444,9 +476,11 @@ async function createMergeRequest(
  * with the branch name `%2F`-encoded in the path, which routed correctly.
  * So the classification below holds there.
  *
- * STILL UNCONFIRMED against the target self-managed CE 19.3.0 instance —
- * tracked as `docs/ce-verification.md` §B1, and gitlab.com
- * is SaaS/EE on continuous deployment, so it is not evidence for CE. If CE
+ * ALSO CONFIRMED on the target self-managed CE instance 2026-09-22
+ * (`docs/ce-verification.md` §B1): an absent branch answered HTTP 404 with
+ * `{"message":"404 Branch Not Found"}`, the same shape. The deferred question
+ * below is settled; it is kept because it states what the classification
+ * costs if a future version changes its mind. If CE
  * answers 403, or 200 with an error body, this reads it as a lookup failure
  * and the submit aborts having written nothing; a surprise costs a submit
  * rather than data, which is why it was accepted as a deferred question
@@ -1401,9 +1435,13 @@ function classifyScopedStatus(status: number): FailureKind {
  * guessing; the caller keeps the insufficient-permission classification
  * either way.
  *
- * Observed on gitlab.com only. NOT yet confirmed against the self-managed
- * CE 19.3.0 target instance — tracked as `docs/ce-verification.md` §B2,
- * which also records what degrades if the shape differs.
+ * CONFIRMED on the self-managed CE target 2026-09-22 as well
+ * (`docs/ce-verification.md` §B2): a refusal came back with
+ * `error_description` carrying a bracketed `[Metadata: Read]`, and this
+ * function extracted it. CE words the preamble "instance permissions" where
+ * gitlab.com said "project permissions"; the bracket match is indifferent to
+ * that, which is why the bracketed form was preferred over the identifier
+ * regex. §B2 also records what degrades if the shape differs.
  */
 /**
  * Whether this failed write is the `last_commit_id` guard firing rather than
@@ -1423,8 +1461,12 @@ function classifyScopedStatus(status: number): FailureKind {
  * exactly as it did before, and the write is still REFUSED. A wording change
  * costs the author a precise message, never their colleague's edit.
  *
- * OBSERVED on gitlab.com 2026-09-12 (`docs/ce-verification.md` §B8); NOT yet
- * on CE 19.3.0.
+ * OBSERVED on gitlab.com 2026-09-12 (`docs/ce-verification.md` §B8) and
+ * CONFIRMED on CE 2026-09-22 (§B10): CE refuses a stale `last_commit_id` with
+ * this exact English, so the match fires and the failure classifies
+ * `content-changed` rather than `unexpected`. The prose dependency is still
+ * the weak part — a future wording change or a localized instance silently
+ * costs the precise message, never the write.
  */
 function isContentChanged(response: RequestUrlResponse): boolean {
 	if (response.status !== 400) {
@@ -1512,6 +1554,7 @@ function normalizeHost(host: string): string {
 }
 
 export {
+	normalizeHost,
 	getCurrentUser,
 	getProjectAccess,
 	createBranchWithCommit,
