@@ -1303,6 +1303,32 @@ class DocsPublisherView extends ItemView {
 	}
 }
 
+/**
+ * Shown at start-up when `data.json` existed but could not be used, and was
+ * copied aside before being replaced with empty data (guard-plugin-data,
+ * 2026-09-30). The backup's file name is left out on purpose: it means
+ * nothing to the author, and whoever looks after the plugin finds it by its
+ * `data-unreadable-` prefix and the logged path.
+ *
+ * Vocabulary-checked: no "branch", "commit", "merge request", "MR",
+ * "conflict" or "main". "Not submitted yet" is the fixed label for
+ * `unsubmitted`.
+ */
+const DATA_RECOVERED_MESSAGE =
+	"Docs Publisher couldn't read the information it saves about your documents, so it has started fresh. " +
+	"A copy of the old information was kept in the plugin's folder. Until it's put back, documents you " +
+	'imported may show as Not submitted yet, and you may need to enter your GitLab address and project ID ' +
+	'again. Please tell whoever looks after Docs Publisher for your team.';
+
+/**
+ * Shown instead when even the copy failed, so the store writes nothing for
+ * the session to keep the original alive. Vocabulary-checked, as above.
+ */
+const DATA_HELD_MESSAGE =
+	"Docs Publisher couldn't read the information it saves about your documents, and couldn't keep a copy " +
+	"of it. To avoid losing it, Docs Publisher won't save anything new about your documents until Obsidian " +
+	'is restarted. Please tell whoever looks after Docs Publisher for your team.';
+
 class DocsPublisherPlugin extends Plugin {
 	// The connection details. AMENDED 2026-09-30 (persist-connection-
 	// settings): the address and project ID are remembered in `data.json`
@@ -1338,7 +1364,13 @@ class DocsPublisherPlugin extends Plugin {
 	private viewActivating = false;
 
 	async onload(): Promise<void> {
-		await this.submissions.load();
+		// Timeout 0 keeps the notice up until clicked: one that fades at
+		// start-up, often before the author is looking, has not told them
+		// (guard-plugin-data design.md decision 6).
+		const loaded = await this.submissions.load();
+		if (loaded !== 'loaded') {
+			new Notice(loaded === 'recovered' ? DATA_RECOVERED_MESSAGE : DATA_HELD_MESSAGE, 0);
+		}
 
 		// The remembered address and project ID, filled in before the settings
 		// tab or the view can read them (2026-09-30). The connection state is
