@@ -39,24 +39,81 @@ function emptyData(): PluginData {
 class SubmissionStore {
 	private data: PluginData = emptyData();
 	private readonly listeners = new Set<() => void>();
+	// Set when an unusable `data.json` could not be copied aside: the
+	// original is then the only copy, and no save may reach it until
+	// Obsidian restarts (guard-plugin-data, 2026-09-30).
+	private holdWrites = false;
 
 	constructor(private readonly plugin: Plugin) {}
 
-	/** Loads persisted records. Call once, from `onload`, before first use. */
-	async load(): Promise<void> {
+	/**
+	 * Loads persisted records. Call once, from `onload`, before first use.
+	 *
+	 * Says which of three things happened, for `onload` to tell the author
+	 * (guard-plugin-data, 2026-09-30). An unusable `data.json` used to load as
+	 * empty in silence, and the next save overwrote it — losing every imported
+	 * document's "Published" state, which nothing on the remote can rebuild.
+	 */
+	async load(): Promise<'loaded' | 'recovered' | 'held'> {
 		const raw: unknown = await this.plugin.loadData();
-		this.data = isPluginData(raw) ? raw : emptyData();
-		// Validated apart from `isPluginData`, and dropped rather than fatal: a
-		// bad `connection` rejecting the whole file would fall back to empty
-		// data, and the next save would erase every record (decision 5). Kept
-		// ones are rebuilt from the two named properties, so nothing else a
-		// hand-edited file put under the key is written back.
-		const connection: unknown = this.data.connection;
-		if (isSavedConnection(connection)) {
-			this.data.connection = { host: connection.host, projectId: connection.projectId };
-		} else {
-			delete this.data.connection;
+		if (isPluginData(raw)) {
+			this.data = raw;
+			// Validated apart from `isPluginData`, and dropped rather than fatal: a
+			// bad `connection` rejecting the whole file would set every record
+			// aside and start fresh, over two settings the author can retype
+			// (persist-connection-settings decision 5, kept by guard-plugin-data
+			// decision 5). Kept ones are rebuilt from the two named properties,
+			// so nothing else a hand-edited file put under the key is written
+			// back.
+			const connection: unknown = this.data.connection;
+			if (isSavedConnection(connection)) {
+				this.data.connection = { host: connection.host, projectId: connection.projectId };
+			} else {
+				delete this.data.connection;
+			}
+			return 'loaded';
 		}
+
+		this.data = emptyData();
+		// Missing is decided by the file's existence, not by `null` versus
+		// `undefined`: that split rests on a minified Obsidian internal and an
+		// unchecked mobile adapter, and getting it wrong would show a data-loss
+		// warning on every first run (guard-plugin-data design.md decision 2).
+		// `null` is Obsidian's answer for a missing file, and a file that
+		// literally holds `null` has nothing to lose, so it counts as missing
+		// without asking.
+		if (raw === null) {
+			return 'loaded';
+		}
+
+		const adapter = this.plugin.app.vault.adapter;
+		const dir = this.plugin.manifest.dir;
+		const dataPath = `${dir}/data.json`;
+		// An `exists` that itself fails cannot prove the file absent, so it is
+		// taken as present: a spurious notice is the safe way to be wrong.
+		if (!(await adapter.exists(dataPath).catch(() => true))) {
+			return 'loaded';
+		}
+
+		// `copy` moves bytes without parsing them, so it keeps bad JSON and a
+		// bad shape alike. The timestamp keeps an earlier incident's copy from
+		// being overwritten by a later one (decision 3).
+		const backupPath = `${dir}/data-unreadable-${Date.now()}.json`;
+		try {
+			await adapter.copy(dataPath, backupPath);
+		} catch (error) {
+			// The original stays the only copy, so nothing may overwrite it
+			// this session (decision 4).
+			this.holdWrites = true;
+			console.error(`Docs Publisher: could not copy unusable ${dataPath}; saving is off until restart`, error);
+			return 'held';
+		}
+
+		console.error(`Docs Publisher: unusable ${dataPath} copied to ${backupPath}`);
+		// Written straight away so the next start-up finds a valid file: one
+		// notice and one backup, not one per launch until the next save.
+		await this.write();
+		return 'recovered';
 	}
 
 	savedConnection(): SavedConnection | undefined {
@@ -73,7 +130,7 @@ class SubmissionStore {
 	 */
 	async saveConnection(saved: SavedConnection): Promise<void> {
 		this.data.connection = { host: saved.host, projectId: saved.projectId };
-		await this.plugin.saveData(this.data);
+		await this.write();
 	}
 
 	get(docId: string): SubmissionRecord | undefined {
@@ -131,7 +188,7 @@ class SubmissionStore {
 		for (const record of records) {
 			this.data.submissions[record.docId] = record;
 		}
-		await this.plugin.saveData(this.data);
+		await this.write();
 		for (const listener of [...this.listeners]) {
 			listener();
 		}
@@ -152,9 +209,26 @@ class SubmissionStore {
 			this.listeners.delete(listener);
 		};
 	}
+
+	/**
+	 * The ONE place `data.json` is written. Everything else changes memory
+	 * and calls this, so holding writes is a single check here, not one in
+	 * each caller — and in-memory state and `onChange` listeners carry on
+	 * normally for the session while writes are held (decision 4).
+	 */
+	private async write(): Promise<void> {
+		if (this.holdWrites) {
+			return;
+		}
+		await this.plugin.saveData(this.data);
+	}
 }
 
-/** Guards against `data.json` being absent, foreign, or corrupted. */
+/**
+ * Recognises a usable `data.json`: an object holding a `submissions` object.
+ * Checks the top-level shape only. Whether an unrecognised file is absent or
+ * unusable is decided in `load()`, not here (guard-plugin-data, 2026-09-30).
+ */
 function isPluginData(value: unknown): value is PluginData {
 	return (
 		typeof value === 'object' &&
