@@ -312,6 +312,38 @@ picking one.
   attempted before pasting them (or after a restart with nothing
   pasted yet) must fail clearly and point at the settings tab — the
   same surface the 401-expiry failure mode above already points at.
+  AMENDED 2026-09-30 (persist-connection-settings, raised by that day's
+  release-readiness review as a v1 blocker). The decision above is now
+  narrowed to the TOKEN alone; the text above is kept as written, and this
+  note governs where they differ:
+    - `GL_HOST` and `GL_PROJECT` now PERSIST. They are written to
+      `data.json` under an optional `connection: { host, projectId }` key
+      when the author selects "Test connection" with all three fields
+      filled in, as typed and whatever the check's outcome, and filled back
+      into the settings tab at start-up. Neither is a credential: neither
+      carries any authority on its own. The address does name an internal
+      host, accepted as low sensitivity — `data.json` is already plaintext
+      by the storage decision, and anyone who can read the vault can read
+      the documents, which say more than the server's name.
+    - `GL_TOKEN` is UNCHANGED: in memory for the session only, never
+      written to `data.json` or any other file. This is enforced
+      structurally, not by care — the saved shape (`SavedConnection`) has
+      no field that could hold it, and `SubmissionStore.saveConnection`
+      builds the object from the two named properties rather than
+      spreading `ConnectionDetails`. A unit test asserts on the serialized
+      output (`plugin/tests/connection-settings.test.ts`).
+    - The daily burden is now ONE field, the token. "Connected as ..."
+      must still be re-established once per launch: start-up with saved
+      values begins not checked, and nothing checks automatically,
+      because no token is present to check with.
+    - `SubmissionStore` stays the only writer of `data.json`; see that
+      change's design.md decision 1 for why a second writer was rejected.
+  THE SPIKE BELOW IS DELIBERATELY LEFT OPEN, 2026-09-30, against its own
+  "answer it when credential handling is next touched" instruction. Why:
+  this change did not touch where the token is stored — it reads the
+  token exactly as before and only stops re-asking for the two values
+  that are not secret. The spike stays open, unassigned, and after v1.
+  Recorded here so the deferral is a decision rather than an oversight.
   OPEN SPIKE (raised 2026-08-26), NOT a reversal. The decision above
   stands and remains in force until this spike says otherwise; do not
   build against `secretStorage` before it is answered.

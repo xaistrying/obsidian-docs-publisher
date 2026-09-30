@@ -4,11 +4,17 @@ import { getCurrentUser, getProjectAccess } from '../git-publishing/gitlab-clien
 import { EMPTY_REPOSITORY_MESSAGE } from './access-messages';
 import { hasConnectionDetails } from './connection';
 import type { ConnectionState, ConnectionStateHolder } from './connection-state';
+import type { SavedConnection } from '../submission-tracking/submission-store';
 
-/** All the settings tab needs from the plugin: the details, and the outcome. */
+/**
+ * All the settings tab needs from the plugin: the details, the outcome, and
+ * a way to remember the two non-secret values (2026-09-30). The tab gets no
+ * dependency on the store that writes them.
+ */
 export interface ConnectionHolder {
 	readonly connection: ConnectionDetails;
 	readonly connectionState: ConnectionStateHolder;
+	rememberConnection(saved: SavedConnection): Promise<void>;
 }
 
 const CHECKING_MESSAGE = 'Checking…';
@@ -76,8 +82,9 @@ class ConnectionSettingTab extends PluginSettingTab {
 		// line of text.
 		containerEl.createEl('p', {
 			text:
-				'These details are kept for this Obsidian session only. Nothing is written to disk, ' +
-				'so you enter them again after a restart.',
+				'Your GitLab address and project ID are remembered after you test the connection. ' +
+				'Your access token is kept for this Obsidian session only and never written to disk, ' +
+				'so you paste it again after a restart.',
 			cls: 'setting-item-description',
 		});
 
@@ -208,6 +215,18 @@ class ConnectionSettingTab extends PluginSettingTab {
 			this.setStatus(EMPTY_FIELDS_MESSAGE);
 			return;
 		}
+
+		// Remembered as typed, before the check and whatever its outcome: a
+		// check most often fails for a reason unrelated to these two values,
+		// such as an expired token. A failed save must not stop the author
+		// connecting this session (persist-connection-settings, 2026-09-30).
+		// Started, not awaited: awaiting here would let a second click through
+		// the `checking` guard above before the state below is set.
+		this.holder
+			.rememberConnection({ host: details.host, projectId: details.projectId })
+			.catch((error: unknown) => {
+				console.error('Docs Publisher: could not remember the connection details', error);
+			});
 
 		state.set({ kind: 'checking' });
 		try {

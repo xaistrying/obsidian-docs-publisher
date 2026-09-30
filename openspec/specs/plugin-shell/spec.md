@@ -60,7 +60,7 @@ same whether or not the plugin is connected.
 
 #### Scenario: Opening the view before any connection has been checked
 - **WHEN** the author opens the sidebar view in a session where no connection check has succeeded
-- **THEN** the view shows "Not connected yet", the message "Add your GitLab details to start publishing documents.", a control labelled "Open settings", and the note "You enter these once each time you start Obsidian."
+- **THEN** the view shows "Not connected yet", the message "Add your GitLab details to start publishing documents.", a control labelled "Open settings", and the note "You paste your access token once each time you start Obsidian."
 
 #### Scenario: A check is running
 - **WHEN** a connection check is in progress while the sidebar view is open

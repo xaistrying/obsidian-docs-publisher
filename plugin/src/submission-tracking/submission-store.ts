@@ -1,8 +1,21 @@
 import type { Plugin } from 'obsidian';
 import type { EditBaseline, SubmissionRecord } from './submission-record';
 
+/**
+ * The two connection values remembered across restarts (persist-connection-
+ * settings, 2026-09-30). There is deliberately no token field: the token is
+ * session-only, and a field that does not exist cannot be written by a later
+ * change that forgets the rule.
+ */
+interface SavedConnection {
+	host: string;
+	projectId: string;
+}
+
 interface PluginData {
 	submissions: Record<string, SubmissionRecord>;
+	// Optional so a `data.json` from before 2026-09-30 loads unchanged.
+	connection?: SavedConnection;
 }
 
 function emptyData(): PluginData {
@@ -15,6 +28,13 @@ function emptyData(): PluginData {
  * decision — this holds no credential, so that decision's objections don't
  * apply here. Never touches a note's front matter: submission state lives
  * only in plugin data, readable only through this store.
+ *
+ * Also holds the remembered address and project ID (2026-09-30). This store
+ * is the ONLY writer of `data.json`: it rewrites the whole file on every
+ * save, so a second writer keeping its own copy would erase this one's keys,
+ * and this one would erase its (persist-connection-settings design.md
+ * decision 1). If a third concern ever needs the file, extract a shared
+ * owner then.
  */
 class SubmissionStore {
 	private data: PluginData = emptyData();
@@ -26,6 +46,34 @@ class SubmissionStore {
 	async load(): Promise<void> {
 		const raw: unknown = await this.plugin.loadData();
 		this.data = isPluginData(raw) ? raw : emptyData();
+		// Validated apart from `isPluginData`, and dropped rather than fatal: a
+		// bad `connection` rejecting the whole file would fall back to empty
+		// data, and the next save would erase every record (decision 5). Kept
+		// ones are rebuilt from the two named properties, so nothing else a
+		// hand-edited file put under the key is written back.
+		const connection: unknown = this.data.connection;
+		if (isSavedConnection(connection)) {
+			this.data.connection = { host: connection.host, projectId: connection.projectId };
+		} else {
+			delete this.data.connection;
+		}
+	}
+
+	savedConnection(): SavedConnection | undefined {
+		return this.data.connection;
+	}
+
+	/**
+	 * Remembers the address and project ID. Builds the object from the two
+	 * named properties and never spreads its argument: handed a full
+	 * `ConnectionDetails`, `{ ...saved }` would copy the token into
+	 * `data.json`, and the type checker would allow it (decision 2).
+	 *
+	 * Does not notify `onChange` listeners — no record changed.
+	 */
+	async saveConnection(saved: SavedConnection): Promise<void> {
+		this.data.connection = { host: saved.host, projectId: saved.projectId };
+		await this.plugin.saveData(this.data);
 	}
 
 	get(docId: string): SubmissionRecord | undefined {
@@ -116,4 +164,14 @@ function isPluginData(value: unknown): value is PluginData {
 	);
 }
 
+function isSavedConnection(value: unknown): value is SavedConnection {
+	return (
+		typeof value === 'object' &&
+		value !== null &&
+		typeof (value as { host?: unknown }).host === 'string' &&
+		typeof (value as { projectId?: unknown }).projectId === 'string'
+	);
+}
+
 export { SubmissionStore };
+export type { SavedConnection };

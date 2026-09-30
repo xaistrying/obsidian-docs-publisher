@@ -60,6 +60,7 @@ import {
 	UNSUBMITTED_LABEL,
 	configuredProject,
 } from './submission-tracking/submission-record';
+import type { SavedConnection } from './submission-tracking/submission-store';
 import { SubmissionStore } from './submission-tracking/submission-store';
 
 const VIEW_TYPE = 'docs-publisher-view';
@@ -680,7 +681,7 @@ class DocsPublisherView extends ItemView {
 			container.createEl('p', { text: 'Add your GitLab details to start publishing documents.' });
 			this.addSettingsButton(container);
 			container.createEl('p', {
-				text: 'You enter these once each time you start Obsidian.',
+				text: 'You paste your access token once each time you start Obsidian.',
 				cls: 'setting-item-description',
 			});
 			return;
@@ -1303,18 +1304,22 @@ class DocsPublisherView extends ItemView {
 }
 
 class DocsPublisherPlugin extends Plugin {
-	// Session-scoped connection details. Deliberately never persisted: no
-	// saveData call goes anywhere near these, so they are empty again on the
-	// next launch and no token ever lands in a synced file.
+	// The connection details. AMENDED 2026-09-30 (persist-connection-
+	// settings): the address and project ID are remembered in `data.json`
+	// once tested, and filled back in at `onload`. The token alone is never
+	// persisted — it is empty again on the next launch, so it never lands in
+	// a synced file.
 	readonly connection: ConnectionDetails = createEmptyConnectionDetails();
 
 	// The outcome of the last check, held beside the details it describes and
 	// with the same lifetime — memory only, gone on reload.
 	readonly connectionState = new ConnectionStateHolder();
 
-	// Unlike the connection details above, this DOES persist to `data.json` —
-	// plaintext by default per `openspec/config.yaml`'s storage decision. It
-	// holds no credential, so that decision's objections don't apply here.
+	// Unlike the token above, this DOES persist to `data.json` — plaintext by
+	// default per `openspec/config.yaml`'s storage decision. It holds no
+	// credential, so that decision's objections don't apply here. It is also
+	// the file's only writer, so it holds the remembered address and project
+	// ID too (2026-09-30).
 	readonly submissions = new SubmissionStore(this);
 
 	// The states last resolved from the remote, plus how that went. Memory
@@ -1334,6 +1339,15 @@ class DocsPublisherPlugin extends Plugin {
 
 	async onload(): Promise<void> {
 		await this.submissions.load();
+
+		// The remembered address and project ID, filled in before the settings
+		// tab or the view can read them (2026-09-30). The connection state is
+		// left `unverified`: with no token at start-up, this is not a check.
+		const saved = this.submissions.savedConnection();
+		if (saved !== undefined) {
+			this.connection.host = saved.host;
+			this.connection.projectId = saved.projectId;
+		}
 
 		// Editing any connection detail discards the verified result, and the
 		// three resolved lists have to go with it: they describe the project
@@ -1447,6 +1461,11 @@ class DocsPublisherPlugin extends Plugin {
 	onunload(): void {
 		// Note: We deliberately do NOT call detachLeavesOfType here.
 		// Detaching would destroy the user's layout every time the plugin updates.
+	}
+
+	/** For the settings tab's Test connection. The store builds the saved shape. */
+	async rememberConnection(saved: SavedConnection): Promise<void> {
+		await this.submissions.saveConnection(saved);
 	}
 
 	/**

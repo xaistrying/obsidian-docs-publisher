@@ -534,10 +534,18 @@ context: |
     deprecation risk and why it is currently moot; and that "Test connection"
     reads identity plus project role through git-publishing, which owns every
     request — surfacing a ROLE, never the token's actual grants.
+    AMENDED 2026-09-30 (persist-connection-settings): of the three values,
+    only the TOKEN is now session-only and never written to any file. The
+    GitLab address and project ID persist in `data.json` once tested — not
+    credentials, so the daily re-entry is one field. The `secretStorage`
+    spike stays open past v1, deliberately. `docs/access-tokens.md` §3.
   - Treat plugin data storage (submission-tracking state, once that
     capability lands) as plaintext by default. Flag explicitly before
     persisting anything else. Does not apply to credentials, which are
     session-only per the decision above and never reach `data.json`.
+    FLAGGED 2026-09-30, as this rule asks: `data.json` now also holds the
+    tested address and project ID (`connection`), written only through
+    `SubmissionStore`, the file's single writer. The token never does.
   - UI placement: panel opens in the RIGHT sidebar (Obsidian convention for
     contextual tools; the left sidebar is for vault navigation). Two entry
     points, both calling the same activation path: a ribbon icon and a
