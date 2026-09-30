@@ -106,3 +106,26 @@ describe('what a failed refresh does to states already resolved', () => {
 		expect(holder.lastOutcome).toEqual({ kind: 'never' });
 	});
 });
+
+/**
+ * The one write outside a refresh: a review this session's own submit opened
+ * (show-reset-after-submit). It records one document, so it is not a refresh
+ * and says nothing about how the last one went.
+ */
+describe('recording a review this session opened', () => {
+	it('leaves the last refresh outcome as it was, and the next successful refresh decides', () => {
+		const holder = new DocumentStatusHolder();
+		holder.recordSuccess([resolved('test-004', 'pending')]);
+		holder.recordFailure('not-reachable');
+
+		holder.recordNewReview('test-010', 7);
+
+		expect(holder.lastOutcome).toEqual({ kind: 'failed', failure: 'not-reachable' });
+		expect(holder.statusFor('test-010')?.submission).toEqual({ state: 'pending', mrIid: 7, webUrl: null });
+		expect(holder.statusFor('test-004')?.submission?.state).toBe('pending');
+
+		holder.recordSuccess([resolved('test-004', 'published')]);
+
+		expect(holder.statusFor('test-010')).toBeNull();
+	});
+});

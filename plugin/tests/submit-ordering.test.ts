@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it } from 'vitest';
 import type { App, Plugin, TFile } from 'obsidian';
 import { setRequestUrlHandler, stubResponse } from './obsidian-stub';
 import { openNewCycle } from '../src/doc-authoring/submit-document';
+import { DocumentStatusHolder } from '../src/submission-tracking/document-status';
 import { SubmissionStore } from '../src/submission-tracking/submission-store';
 
 /**
@@ -26,12 +27,19 @@ afterEach(() => {
 
 /** The remote accepts the branch, the commit and the merge request. */
 function remoteAccepts(): void {
+	remoteAnswersMergeRequest(201);
+}
+
+/** The branch and commit are accepted; the merge request gets `status`. */
+function remoteAnswersMergeRequest(status: number): void {
 	restore = setRequestUrlHandler((request) => {
 		if (request.url.endsWith('/repository/commits')) {
 			return stubResponse({ status: 201, body: JSON.stringify({ id: 'abc' }) });
 		}
 		if (request.url.endsWith('/merge_requests')) {
-			return stubResponse({ status: 201, body: JSON.stringify({ iid: 9 }) });
+			return status === 201
+				? stubResponse({ status: 201, body: JSON.stringify({ iid: 9 }) })
+				: stubResponse({ status, body: JSON.stringify({ message: 'refused' }) });
 		}
 		return stubResponse({ status: 200, body: JSON.stringify({ default_branch: 'main', empty_repo: false }) });
 	});
@@ -57,8 +65,12 @@ async function emptyStore(): Promise<SubmissionStore> {
 	return store;
 }
 
-function submit(app: App, store: SubmissionStore): Promise<void> {
-	return openNewCycle(app, DETAILS, FILE, RESULT, store, {
+function submit(
+	app: App,
+	store: SubmissionStore,
+	statuses: DocumentStatusHolder = new DocumentStatusHolder()
+): Promise<void> {
+	return openNewCycle(app, DETAILS, FILE, RESULT, store, statuses, {
 		docId: 'Setup',
 		branch: 'doc/Setup',
 		project: PROJECT,
@@ -93,5 +105,36 @@ describe('the order a first submit writes in', () => {
 		await submit(appWhoseFrontMatterWrite('succeeds'), store);
 
 		expect(store.get('Setup')?.mtime).toBe(5_000);
+	});
+});
+
+/**
+ * A review the submit itself opened counts as resolved, so Reset shows with no
+ * refresh (show-reset-after-submit). Pinned here because `openNewCycle` is the
+ * only place that may record it.
+ */
+describe('what a submit that opens a review records as resolved', () => {
+	it('records the document as pending, with the new review number and no link', async () => {
+		remoteAccepts();
+		const store = await emptyStore();
+		const statuses = new DocumentStatusHolder();
+
+		await submit(appWhoseFrontMatterWrite('succeeds'), store, statuses);
+
+		expect(statuses.statusFor('Setup')).toEqual({
+			docId: 'Setup',
+			submission: { state: 'pending', mrIid: 9, webUrl: null },
+		});
+	});
+
+	it('records nothing when opening the review fails', async () => {
+		remoteAnswersMergeRequest(500);
+		const store = await emptyStore();
+		const statuses = new DocumentStatusHolder();
+
+		await submit(appWhoseFrontMatterWrite('succeeds'), store, statuses);
+
+		expect(store.get('Setup')).toBeUndefined();
+		expect(statuses.statusFor('Setup')).toBeNull();
 	});
 });

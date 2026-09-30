@@ -69,6 +69,30 @@ class DocumentStatusHolder {
 		this.notify();
 	}
 
+	/**
+	 * Records ONE document as pending, for the one caller that has just made
+	 * that true: `openNewCycle`, straight after its submit opened the review
+	 * (show-reset-after-submit, 2026-09-30).
+	 *
+	 * `pending` is hard-coded, not a parameter, and that is the point. Every
+	 * path into `openNewCycle` has established that nothing was open from this
+	 * branch, so the review just created is the only open one, and a review a
+	 * moment old carries no resolvable thread — a refresh would answer exactly
+	 * this (design.md decision 1). No other submit path may call it. "Send
+	 * update" pushes to a review that may hold unresolved threads, and writing
+	 * `pending` there is the optimistic flip `openspec/config.yaml` rejected
+	 * (milestones 6/7/7a); a generic setter would make that flip one line.
+	 *
+	 * No link: creating the review returns only its number, so the row's link
+	 * waits for the next refresh. `lastOutcome` is left alone, because one
+	 * document is not a refresh. The next successful refresh replaces this
+	 * entry with everything else.
+	 */
+	recordNewReview(docId: string, mrIid: number): void {
+		this.statuses.set(docId, { docId, submission: { state: 'pending', mrIid, webUrl: null } });
+		this.notify();
+	}
+
 	recordFailure(failure: FailureKind, detail?: string): void {
 		this.outcome = detail === undefined ? { kind: 'failed', failure } : { kind: 'failed', failure, detail };
 		this.notify();

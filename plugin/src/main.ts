@@ -808,8 +808,10 @@ class DocsPublisherView extends ItemView {
 	 * record the section above labels with. A stored state can be left over
 	 * from a previous session, and offering a destructive action off one
 	 * would act on an answer the remote was never asked for. A document
-	 * nothing has resolved yet gets no Reset at all, for the same reason its
-	 * row shows no label.
+	 * nothing has resolved yet gets no Reset at all.
+	 *
+	 * A review this session's own submit opened counts as resolved: the submit
+	 * records it (show-reset-after-submit, 2026-09-30).
 	 */
 	private renderResetAction(container: HTMLElement, file: TFile): void {
 		const docId = readDocId(this.app, file);
@@ -1482,7 +1484,13 @@ class DocsPublisherPlugin extends Plugin {
 	 * the same reason as `newDocument` above.
 	 */
 	private submitForReview(): void {
-		submitDocumentForReview(this.app, this.connection, this.connectionState.current, this.submissions);
+		submitDocumentForReview(
+			this.app,
+			this.connection,
+			this.connectionState.current,
+			this.submissions,
+			this.documentStatuses
+		);
 	}
 
 	/**

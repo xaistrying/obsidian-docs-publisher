@@ -15,6 +15,7 @@ import { EMPTY_REPOSITORY_MESSAGE } from '../platform-config/access-messages';
 import type { ConnectionState } from '../platform-config/connection-state';
 import { resolveDocumentState } from '../submission-tracking/document-state';
 import { captureEditBaseline, listVaultDocuments } from '../submission-tracking/document-status';
+import type { DocumentStatusHolder } from '../submission-tracking/document-status';
 import { branchForDocId, readDocId } from '../submission-tracking/resolve';
 import type { ProjectRef, SubmissionState } from '../submission-tracking/submission-record';
 import { SUBMISSION_STATE_LABELS, projectRef } from '../submission-tracking/submission-record';
@@ -208,7 +209,13 @@ export function submitForReview(
 	app: App,
 	details: ConnectionDetails,
 	state: ConnectionState,
-	store: SubmissionStore
+	store: SubmissionStore,
+	/**
+	 * The session's resolved states, handed down to `openNewCycle` and to
+	 * nothing else: a review this submit opens is recorded as resolved there,
+	 * so Reset shows without a refresh (show-reset-after-submit, 2026-09-30).
+	 */
+	statuses: DocumentStatusHolder
 ): void {
 	const gate = requireAuthoringGate(details, state);
 	if (gate === null) {
@@ -229,7 +236,7 @@ export function submitForReview(
 	const existingDocId = readDocId(app, file);
 	if (existingDocId === null) {
 		new SubmitModal(app, file, (result) => {
-			void performSubmit(app, details, gate, file, result, store, null);
+			void performSubmit(app, details, gate, file, result, store, statuses, null);
 		}).open();
 		return;
 	}
@@ -250,7 +257,7 @@ export function submitForReview(
 		// running plugin 2026-09-14 (§E6).
 		if (!hasSubmissionCategory(app, file)) {
 			new SubmitModal(app, file, (result) => {
-				void performSubmit(app, details, gate, file, result, store, existingDocId, true);
+				void performSubmit(app, details, gate, file, result, store, statuses, existingDocId, true);
 			}).open();
 			return;
 		}
@@ -267,7 +274,7 @@ export function submitForReview(
 		app,
 		file,
 		(result) => {
-			void performSubmit(app, details, gate, file, result, store, existingDocId);
+			void performSubmit(app, details, gate, file, result, store, statuses, existingDocId);
 		},
 		existing
 	).open();
@@ -292,6 +299,7 @@ async function performSubmit(
 	file: TFile,
 	result: SubmitModalResult,
 	store: SubmissionStore,
+	statuses: DocumentStatusHolder,
 	/**
 	 * The note's frozen `doc_id`, or null when it has none yet. Passed in
 	 * rather than re-read: `submitForReview` already read it to choose the
@@ -325,7 +333,7 @@ async function performSubmit(
 	// evidence; nothing is stamped unless they succeed.
 	const project = projectRef(details, state.access);
 	if (existingDocId !== null) {
-		await performResubmit(app, details, file, result, store, docId, branch, project, completeFields);
+		await performResubmit(app, details, file, result, store, statuses, docId, branch, project, completeFields);
 		return;
 	}
 
@@ -376,7 +384,7 @@ async function performSubmit(
 		return;
 	}
 
-	await openNewCycle(app, details, file, result, store, {
+	await openNewCycle(app, details, file, result, store, statuses, {
 		docId,
 		branch,
 		project,
@@ -440,6 +448,7 @@ async function performResubmit(
 	file: TFile,
 	result: SubmitModalResult,
 	store: SubmissionStore,
+	statuses: DocumentStatusHolder,
 	docId: string,
 	branch: string,
 	project: ProjectRef,
@@ -523,7 +532,7 @@ async function performResubmit(
 			return;
 		}
 
-		await openNewCycle(app, details, file, result, store, {
+		await openNewCycle(app, details, file, result, store, statuses, {
 			docId,
 			branch,
 			project,
@@ -551,7 +560,7 @@ async function performResubmit(
 
 		case 'published':
 		case 'closed':
-			await openFreshCycle(app, details, file, result, store, {
+			await openFreshCycle(app, details, file, result, store, statuses, {
 				docId,
 				branch,
 				project,
@@ -689,6 +698,7 @@ async function openFreshCycle(
 	file: TFile,
 	result: SubmitModalResult,
 	store: SubmissionStore,
+	statuses: DocumentStatusHolder,
 	params: {
 		docId: string;
 		branch: string;
@@ -718,7 +728,7 @@ async function openFreshCycle(
 		return;
 	}
 
-	await openNewCycle(app, details, file, result, store, {
+	await openNewCycle(app, details, file, result, store, statuses, {
 		docId: params.docId,
 		branch: params.branch,
 		project: params.project,
@@ -746,6 +756,7 @@ export async function openNewCycle(
 	file: TFile,
 	result: SubmitModalResult,
 	store: SubmissionStore,
+	statuses: DocumentStatusHolder,
 	params: {
 		docId: string;
 		branch: string;
@@ -806,6 +817,12 @@ export async function openNewCycle(
 		path: file.path,
 		project: params.project,
 	});
+	// And resolved, in the same moment and for the same reason `pending` is
+	// not optimistic here: this is what a refresh would answer, so Reset, the
+	// label and the resubmit button agree at once (show-reset-after-submit,
+	// 2026-09-30). The ONLY such write — `pushUpdate` records nothing, since
+	// a revision resolves no thread (that change's design.md decision 4).
+	statuses.recordNewReview(params.docId, mergeRequest.value.iid);
 
 	if (params.completeFrontMatter !== undefined) {
 		await writeSubmissionFrontMatter(app, file, {
