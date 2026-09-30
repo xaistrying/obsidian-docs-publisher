@@ -3,6 +3,8 @@ import type { TFile } from 'obsidian';
 import type { ConnectionDetails, FailureKind } from './git-publishing/gitlab-client';
 import { normalizeHost } from './git-publishing/gitlab-client';
 import { createEmptyConnectionDetails } from './platform-config/connection';
+import type { WriteAction } from './action-slot';
+import { ActionSlot } from './action-slot';
 import { createDocument } from './doc-authoring/create-document';
 // Aliased: the plugin also has a same-named private method for the two entry
 // points to call. Distinct names here keep that call site from reading like
@@ -99,6 +101,26 @@ const REFRESH_LABEL = 'Refresh';
  * through with no sign anything was happening.
  */
 const CHECKING_LABEL = 'Checking…';
+
+/**
+ * What each write control says while its own action runs
+ * (add-action-busy-states, 2026-09-30), on the same rule as Refresh above:
+ * the control that started the work is where the work is reported.
+ *
+ * Reset has no entry here and borrows `CHECKING_LABEL` on purpose. Until its
+ * confirmation is answered nothing has been reset, and "Resetting…" would
+ * read as the overwrite already happening; the wait is a read, which is what
+ * "Checking…" already means (`docs/ce-verification.md` §D0c).
+ *
+ * Vocabulary-checked: no "branch", "commit", "merge request", "MR",
+ * "conflict", or "main".
+ */
+const BUSY_LABELS: Record<WriteAction, string> = {
+	submit: 'Sending…',
+	reset: CHECKING_LABEL,
+	restore: 'Restoring…',
+	import: 'Importing…',
+};
 /**
  * Named for the rule rather than the owner (name-panel-sections-by-next-actor).
  * It was "Your documents", which reads as ALL of them, so a submitted document
@@ -452,6 +474,7 @@ class DocsPublisherView extends ItemView {
 	private readonly discoverable: DiscoveryHolder;
 	private readonly importAllDocuments: () => void;
 	private readonly onSubmissionsChange: (listener: () => void) => () => void;
+	private readonly writeAction: ActionSlot;
 	/**
 	 * Which collapsible sections the author has collapsed, by key.
 	 *
@@ -484,7 +507,8 @@ class DocsPublisherView extends ItemView {
 		resetDocument: (file: TFile, target: ResettableDocument) => void,
 		discoverable: DiscoveryHolder,
 		importAllDocuments: () => void,
-		onSubmissionsChange: (listener: () => void) => () => void
+		onSubmissionsChange: (listener: () => void) => () => void,
+		writeAction: ActionSlot
 	) {
 		super(leaf);
 		this.state = state;
@@ -508,6 +532,7 @@ class DocsPublisherView extends ItemView {
 		this.onSubmissionsChange = onSubmissionsChange;
 		this.discoverable = discoverable;
 		this.importAllDocuments = importAllDocuments;
+		this.writeAction = writeAction;
 	}
 
 	getViewType(): string {
@@ -586,6 +611,15 @@ class DocsPublisherView extends ItemView {
 		// touches no note to trigger a render of its own. Local, like the rest.
 		this.register(
 			this.onSubmissionsChange(() => {
+				this.scheduleRender();
+			})
+		);
+
+		// And for the running write action, so the pressed control reads busy
+		// and the others stop taking presses (add-action-busy-states). Local,
+		// like the rest.
+		this.register(
+			this.writeAction.onChange(() => {
 				this.scheduleRender();
 			})
 		);
@@ -783,12 +817,13 @@ class DocsPublisherView extends ItemView {
 		// needs itself. The button chooses only what it is CALLED, never what it
 		// does — a panel that decided the action separately would be a second
 		// place for the four-way fork to live, and the two would drift.
-		new ButtonComponent(actionsContainer)
+		const submit = new ButtonComponent(actionsContainer)
 			.setButtonText(state === undefined ? SUBMIT_FOR_REVIEW_LABEL : RESUBMIT_LABELS[state])
 			.setCta()
 			.onClick(() => {
 				this.submitForReview();
 			});
+		this.showWriteBusy(submit, 'submit', file.path);
 
 		this.renderResetAction(actionsContainer, file);
 	}
@@ -822,12 +857,13 @@ class DocsPublisherView extends ItemView {
 			return;
 		}
 
-		new ButtonComponent(container)
+		const reset = new ButtonComponent(container)
 			.setButtonText(RESET_LABEL)
 			.setWarning()
 			.onClick(() => {
 				this.resetDocument(file, target);
 			});
+		this.showWriteBusy(reset, 'reset', file.path);
 	}
 
 	/**
@@ -1145,9 +1181,10 @@ class DocsPublisherView extends ItemView {
 			// The `doc_id` is the only name left for it — there is no note to
 			// read a filename from.
 			row.createSpan({ cls: 'docs-publisher-document-name', text: entry.docId });
-			new ButtonComponent(row).setButtonText(RESTORE_LABEL).onClick(() => {
+			const restore = new ButtonComponent(row).setButtonText(RESTORE_LABEL).onClick(() => {
 				this.restoreDocument(entry);
 			});
+			this.showWriteBusy(restore, 'restore', entry.docId);
 		}
 	}
 
@@ -1205,9 +1242,10 @@ class DocsPublisherView extends ItemView {
 				cls: 'setting-item-description',
 			});
 			const actions = section.createDiv({ cls: 'docs-publisher-section-actions' });
-			new ButtonComponent(actions).setButtonText(IMPORT_ALL_LABEL).onClick(() => {
+			const importAll = new ButtonComponent(actions).setButtonText(IMPORT_ALL_LABEL).onClick(() => {
 				this.importAllDocuments();
 			});
+			this.showWriteBusy(importAll, 'import', '');
 		}
 
 		if (!expanded) {
@@ -1276,6 +1314,33 @@ class DocsPublisherView extends ItemView {
 	}
 
 	/**
+	 * A write control while one of the four write actions runs
+	 * (add-action-busy-states design.md decision 4): the busy label and
+	 * disabled when it is THIS action on THIS target, its normal label and
+	 * disabled otherwise, untouched when nothing runs.
+	 *
+	 * The target check keeps "Sending…" off a note that is not being sent
+	 * when the author switches notes mid-submit. Disabling is courtesy only —
+	 * `ActionSlot.run` is what refuses a press that lands before this redraw.
+	 *
+	 * Not a breach of the "never disabled or greyed" rule on New Document
+	 * below: that is about a control that can never succeed in the state it
+	 * is shown in. These are disabled for seconds, and the pressed one says
+	 * why.
+	 */
+	private showWriteBusy(button: ButtonComponent, action: WriteAction, target: string): void {
+		const running = this.writeAction.current;
+		if (running === null) {
+			return;
+		}
+
+		button.setDisabled(true);
+		if (running.action === action && running.target === target) {
+			button.setButtonText(BUSY_LABELS[action]);
+		}
+	}
+
+	/**
 	 * Rendered only in the state where creating would succeed, never disabled
 	 * or greyed elsewhere: a visible button that refuses when pressed is worse
 	 * than no button, and the panel already re-renders when the state changes.
@@ -1334,6 +1399,11 @@ class DocsPublisherPlugin extends Plugin {
 	// The last-resolved set of documents the remote has and this vault does
 	// not (add-discover-and-import). Memory only, like the two above.
 	readonly discoverableDocuments = new DiscoveryHolder();
+
+	// Which of the four write actions is running, if any
+	// (add-action-busy-states, 2026-09-30). Memory only, like the holders
+	// above: the action it describes does not survive a reload either.
+	readonly writeAction = new ActionSlot();
 
 	private viewActivating = false;
 
@@ -1412,7 +1482,8 @@ class DocsPublisherPlugin extends Plugin {
 					() => {
 						this.importAllDocuments();
 					},
-					(listener) => this.submissions.onChange(listener)
+					(listener) => this.submissions.onChange(listener),
+					this.writeAction
 				)
 		);
 
@@ -1482,7 +1553,13 @@ class DocsPublisherPlugin extends Plugin {
 	 * the same reason as `newDocument` above.
 	 */
 	private submitForReview(): void {
-		submitDocumentForReview(this.app, this.connection, this.connectionState.current, this.submissions);
+		submitDocumentForReview(
+			this.app,
+			this.connection,
+			this.connectionState.current,
+			this.submissions,
+			this.writeAction
+		);
 	}
 
 	/**
@@ -1542,7 +1619,7 @@ class DocsPublisherPlugin extends Plugin {
 			return;
 		}
 
-		void (async () => {
+		void this.writeAction.run('import', '', async () => {
 			// Copied first: each success removes a row from the holder, and
 			// iterating a list while the thing it comes from is being edited
 			// is how a batch silently skips half its work.
@@ -1594,7 +1671,7 @@ class DocsPublisherPlugin extends Plugin {
 					`Docs Publisher: imported with images missing — ${incomplete.join(', ')}`
 				);
 			}
-		})();
+		});
 	}
 
 	/**
@@ -1643,7 +1720,7 @@ class DocsPublisherPlugin extends Plugin {
 			return;
 		}
 
-		void (async () => {
+		void this.writeAction.run('restore', target.docId, async () => {
 			const fetched = await fetchResetContent(this.connection, target);
 			if (fetched.kind === 'failed') {
 				new Notice(
@@ -1671,7 +1748,7 @@ class DocsPublisherPlugin extends Plugin {
 				// fetched from the same point in history as its text.
 				branchForDocId(target.docId)
 			);
-		})();
+		});
 	}
 
 	/**
@@ -1698,7 +1775,7 @@ class DocsPublisherPlugin extends Plugin {
 			return;
 		}
 
-		void (async () => {
+		void this.writeAction.run('reset', file.path, async () => {
 			const fetched = await fetchResetContent(this.connection, target);
 			if (fetched.kind === 'failed') {
 				new Notice(
@@ -1727,7 +1804,7 @@ class DocsPublisherPlugin extends Plugin {
 				file.path,
 				fetched.content
 			);
-		})();
+		});
 	}
 
 	private async activateView(): Promise<void> {

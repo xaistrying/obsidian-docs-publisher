@@ -11,6 +11,8 @@ import {
 	getDefaultBranch,
 	getFileContent,
 } from '../git-publishing/gitlab-client';
+import type { ActionSlot } from '../action-slot';
+import { BUSY_MESSAGE } from '../action-slot';
 import { EMPTY_REPOSITORY_MESSAGE } from '../platform-config/access-messages';
 import type { ConnectionState } from '../platform-config/connection-state';
 import { resolveDocumentState } from '../submission-tracking/document-state';
@@ -208,10 +210,20 @@ export function submitForReview(
 	app: App,
 	details: ConnectionDetails,
 	state: ConnectionState,
-	store: SubmissionStore
+	store: SubmissionStore,
+	busy: ActionSlot
 ): void {
 	const gate = requireAuthoringGate(details, state);
 	if (gate === null) {
+		return;
+	}
+
+	// Refused BEFORE the dialog, so the command palette does not let the
+	// author fill it in only to be told no (add-action-busy-states, 2026-09-30).
+	// Opening the dialog takes no slot: the modal already blocks the panel,
+	// and a dismissed dialog would otherwise have a slot to give back.
+	if (busy.current !== null) {
+		new Notice(BUSY_MESSAGE);
 		return;
 	}
 
@@ -229,7 +241,9 @@ export function submitForReview(
 	const existingDocId = readDocId(app, file);
 	if (existingDocId === null) {
 		new SubmitModal(app, file, (result) => {
-			void performSubmit(app, details, gate, file, result, store, null);
+			void busy.run('submit', file.path, () =>
+				performSubmit(app, details, gate, file, result, store, null)
+			);
 		}).open();
 		return;
 	}
@@ -250,7 +264,9 @@ export function submitForReview(
 		// running plugin 2026-09-14 (§E6).
 		if (!hasSubmissionCategory(app, file)) {
 			new SubmitModal(app, file, (result) => {
-				void performSubmit(app, details, gate, file, result, store, existingDocId, true);
+				void busy.run('submit', file.path, () =>
+					performSubmit(app, details, gate, file, result, store, existingDocId, true)
+				);
 			}).open();
 			return;
 		}
@@ -267,7 +283,9 @@ export function submitForReview(
 		app,
 		file,
 		(result) => {
-			void performSubmit(app, details, gate, file, result, store, existingDocId);
+			void busy.run('submit', file.path, () =>
+				performSubmit(app, details, gate, file, result, store, existingDocId)
+			);
 		},
 		existing
 	).open();
