@@ -73,6 +73,27 @@ picking one.
   Still to verify:
     - Token expiry length and the rotation runbook, both implementation
       details for platform-config rather than open architecture.
+      DECIDED 2026-09-30, for the v1 release:
+        - Expiry: one year from creation. This relaxes "short expiry"
+          above on purpose. With the token pasted every launch, a short
+          expiry would add a second routine chore to one the plugin
+          already imposes daily.
+        - Rotation: none centrally. Each author creates their own token,
+          and when it expires the existing 401 message ("Your access has
+          expired or is incorrect…", with Open settings) is the prompt to
+          create a new one. That message appears AFTER expiry, not before
+          it. The user guide suggests a calendar reminder.
+        - A fine-grained token's permissions cannot be edited once
+          created (confirmed on the target instance), so a missing
+          permission also means a new token.
+        - Between restarts, authors keep the token privately on their own
+          machine, for example in a password manager, and never inside
+          the vault, where sync and Submit could publish it. Storing it in
+          Obsidian itself is the open `secretStorage` spike in §3,
+          revisited after release on author feedback.
+        - The target instance is reachable only from the company network
+          (office or VPN). Authoring is offline-safe, so only Submit,
+          Refresh and Import need the network.
   Token type (legacy `api` scope vs. fine-grained) — RESOLVED
   (2026-08-24), provisionally: fine-grained. Context for why this took
   a spike rather than a guess: fine-grained sidesteps the deprecation

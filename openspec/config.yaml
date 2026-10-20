@@ -90,7 +90,10 @@ context: |
      every call failing at once for one person. A 401 anywhere in the
      plugin must surface as "Your access has expired — ask your admin to
      set it up again", not as a generic failure, and must point at the
-     settings tab.
+     settings tab. AMENDED 2026-09-30: authors create their own tokens, so
+     the message is now "Your access token has expired or is incorrect.
+     Check you pasted all of it, or create a new one in GitLab.", one
+     shared string on every surface (self-service-token-messages).
   3. Create a new document — RENAMED 2026-08-26 from "Create a new SOP".
      "New Document" creates a note at the author's current folder with
      the front matter fields the plugin can know at creation, and opens

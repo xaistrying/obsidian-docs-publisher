@@ -1,7 +1,7 @@
 import { App, ButtonComponent, Plugin, PluginSettingTab, Setting } from 'obsidian';
 import type { ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
 import { getCurrentUser, getProjectAccess } from '../git-publishing/gitlab-client';
-import { EMPTY_REPOSITORY_MESSAGE } from './access-messages';
+import { EMPTY_REPOSITORY_MESSAGE, EXPIRED_TOKEN_MESSAGE, tokenPermissionMessage } from './access-messages';
 import { hasConnectionDetails } from './connection';
 import type { ConnectionState, ConnectionStateHolder } from './connection-state';
 import type { SavedConnection } from '../submission-tracking/submission-store';
@@ -20,25 +20,8 @@ export interface ConnectionHolder {
 const CHECKING_MESSAGE = 'Checking…';
 const EMPTY_FIELDS_MESSAGE = 'Fill in all three fields before testing the connection.';
 
-/**
- * The refused-for-a-permission variant, naming the permission GitLab itself
- * reported rather than sending the author to check a project path that is
- * very likely correct (`docs/ce-verification.md` §D0g).
- *
- * The parenthetical is dropped when no name came back, for the same reason
- * the panel's equivalents drop it: an invented name would send someone to
- * tick the wrong box.
- */
-function connectionPermissionMessage(detail: string | undefined): string {
-	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
-	return (
-		`Your access token doesn't have permission to check your connection${missing}. ` +
-		'Ask your admin to add it.'
-	);
-}
-
 const FAILURE_MESSAGES: Record<FailureKind, string> = {
-	'rejected-credential': 'Your access has expired or is incorrect. Please ask your admin to set it up again.',
+	'rejected-credential': EXPIRED_TOKEN_MESSAGE,
 	'not-reachable':
 		'That project could not be found, or your access does not include it. Check the project ID above.',
 	'server-unreachable':
@@ -46,11 +29,10 @@ const FAILURE_MESSAGES: Record<FailureKind, string> = {
 	// REACHABLE as of 2026-09-29, and it was not before: the identity read is
 	// now classified as scoped, so a token missing `User: Read` lands here
 	// instead of on `not-reachable`'s "that project could not be found".
-	// `statusText` prefers `connectionPermissionMessage` below, which names
-	// the permission; this entry is the fallback for a refusal that names
-	// none.
-	'insufficient-permission':
-		"Your access token doesn't have permission to check your account. Ask your admin to add it.",
+	// `statusText` prefers `tokenPermissionMessage('check your connection')`
+	// below, which names the permission; this entry is the fallback for a
+	// refusal that names none.
+	'insufficient-permission': tokenPermissionMessage('check your account', undefined),
 	// Unreachable from "Test connection" for the same reason as the entry
 	// above: this check only reads, and content-changed is produced solely by
 	// a refused write. Present for the table's exhaustiveness.
@@ -284,7 +266,7 @@ class ConnectionSettingTab extends PluginSettingTab {
 				return `Connected as ${state.identity.name} — ${state.access.accessLabel} access`;
 			case 'failed':
 				return state.failure === 'insufficient-permission'
-					? connectionPermissionMessage(state.detail)
+					? tokenPermissionMessage('check your connection', state.detail)
 					: FAILURE_MESSAGES[state.failure];
 		}
 	}

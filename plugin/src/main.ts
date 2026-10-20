@@ -12,8 +12,10 @@ import { createDocument } from './doc-authoring/create-document';
 import { submitForReview as submitDocumentForReview } from './doc-authoring/submit-document';
 import {
 	EMPTY_REPOSITORY_MESSAGE,
+	EXPIRED_TOKEN_MESSAGE,
 	NO_DOCUMENT_ACCESS_MESSAGE,
 	readOnlyMessage,
+	tokenPermissionMessage,
 } from './platform-config/access-messages';
 import type { ConnectionState } from './platform-config/connection-state';
 import { ConnectionStateHolder, grantsAuthoring, grantsReadOnly } from './platform-config/connection-state';
@@ -288,17 +290,6 @@ function sectionSuffix(outcome: RefreshOutcomeKind | undefined, count: number): 
 	return String(count);
 }
 
-const RECOVERY_REFRESH_FAILED_MESSAGE =
-	'Could not check which documents can be recovered just now. Try again later.';
-
-function recoveryPermissionMessage(detail: string | undefined): string {
-	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
-	return (
-		`Your access token doesn't have permission to check which documents can be recovered${missing}. ` +
-		'Ask your admin to add it.'
-	);
-}
-
 /**
  * add-discover-and-import: the third list, for a document the remote holds
  * that this vault has no note for. Absent entirely rather than shown empty,
@@ -321,14 +312,6 @@ const DISCOVERY_INCOMPLETE_MESSAGE =
 
 const DISCOVERY_REFRESH_FAILED_MESSAGE =
 	'Could not check which documents are available to import just now. Try again later.';
-
-function discoveryPermissionMessage(detail: string | undefined): string {
-	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
-	return (
-		`Your access token doesn't have permission to list the project's documents${missing}. ` +
-		'Ask your admin to add it.'
-	);
-}
 
 /**
  * One line per outcome, so a batch reports what happened to EVERY document
@@ -364,14 +347,6 @@ function importBatchMessage(imported: number, refused: number, incomplete: reado
 	return lines.join('\n');
 }
 
-function resetPermissionMessage(detail: string | undefined): string {
-	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
-	return (
-		`Your access token doesn't have permission to read the version under review${missing}. ` +
-		'Ask your admin to add it.'
-	);
-}
-
 /**
  * Builds a merge request's web link directly from the connection details and
  * a stored `mrIid`, rather than fetching `web_url` — an orphaned record's
@@ -402,51 +377,19 @@ const REFRESH_FAILED_MESSAGE =
 	'since this was last updated.';
 
 /**
- * The refused-for-a-permission variant, which names the permission rather
- * than sending the author to check their connection — the classification
- * built by the interrupted-submit change already carries GitLab's own name
- * for it. The parenthetical is dropped entirely when no name came back: an
- * invented one would send someone to tick the wrong box.
- */
-function refreshPermissionMessage(detail: string | undefined): string {
-	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
-	return (
-		`Your access token doesn't have permission to check your documents' status${missing}. ` +
-		'Ask your admin to add it.'
-	);
-}
-
-/**
  * The panel's own copy for each failure. Deliberately not shared with the
  * settings tab's table: that one says "check the project ID above", which
  * means nothing in a sidebar with no fields above it.
  */
-/**
- * The connection check's refused-for-a-permission variant, for the panel.
- *
- * Reachable as of 2026-09-29: the identity read is now classified as scoped,
- * so a token missing `User: Read` is reported as the missing permission it is
- * rather than as a project that could not be found
- * (`docs/ce-verification.md` §D0g). Points at settings rather than at a
- * project ID, like every other message on this surface.
- */
-function connectionPermissionMessage(detail: string | undefined): string {
-	const missing = detail === undefined ? '' : ` (missing: ${detail})`;
-	return (
-		`Your access token doesn't have permission to check your connection${missing}. ` +
-		'Ask your admin to add it, then check your details in settings.'
-	);
-}
-
 const PANEL_FAILURE_MESSAGES: Record<FailureKind, string> = {
-	'rejected-credential': 'Your access has expired or is incorrect. Ask your admin to set it up again.',
+	'rejected-credential': EXPIRED_TOKEN_MESSAGE,
 	'not-reachable':
 		'That project could not be found, or your access does not include it. Check your details in settings.',
 	'server-unreachable':
 		'Could not reach GitLab at that address. Check the address and your connection, then try again.',
 	// Unreachable via the connection check this table describes — see the
 	// matching note in settings-tab.ts. Present for exhaustiveness only.
-	'insufficient-permission': "Your access token doesn't have permission to do that. Ask your admin to add it.",
+	'insufficient-permission': tokenPermissionMessage('check your connection', undefined),
 	// Unreachable here for the same reason: this table describes a refresh,
 	// which only reads, and content-changed is produced solely by a refused
 	// write. Present for exhaustiveness only.
@@ -763,10 +706,9 @@ class DocsPublisherView extends ItemView {
 	private blockedMessage(state: ConnectionState): string {
 		if (state.kind === 'failed') {
 			// Named where GitLab named it, for the same reason the refresh and
-			// discovery messages do — see `connectionPermissionMessage` in the
-			// settings tab and `docs/ce-verification.md` §D0g.
+			// discovery messages do — see `docs/ce-verification.md` §D0g.
 			return state.failure === 'insufficient-permission'
-				? connectionPermissionMessage(state.detail)
+				? tokenPermissionMessage('check your connection', state.detail)
 				: PANEL_FAILURE_MESSAGES[state.failure];
 		}
 
@@ -965,9 +907,11 @@ class DocsPublisherView extends ItemView {
 		if (outcome.kind === 'failed') {
 			section.createEl('p', {
 				text:
-					outcome.failure === 'insufficient-permission'
-						? refreshPermissionMessage(outcome.detail)
-						: REFRESH_FAILED_MESSAGE,
+					outcome.failure === 'rejected-credential'
+						? EXPIRED_TOKEN_MESSAGE
+						: outcome.failure === 'insufficient-permission'
+							? tokenPermissionMessage("check your documents' status", outcome.detail)
+							: REFRESH_FAILED_MESSAGE,
 				cls: 'setting-item-description',
 			});
 		}
@@ -1257,9 +1201,11 @@ class DocsPublisherView extends ItemView {
 		if (outcome.kind === 'failed') {
 			section.createEl('p', {
 				text:
-					outcome.failure === 'insufficient-permission'
-						? discoveryPermissionMessage(outcome.detail)
-						: DISCOVERY_REFRESH_FAILED_MESSAGE,
+					outcome.failure === 'rejected-credential'
+						? EXPIRED_TOKEN_MESSAGE
+						: outcome.failure === 'insufficient-permission'
+							? tokenPermissionMessage("list the project's documents", outcome.detail)
+							: DISCOVERY_REFRESH_FAILED_MESSAGE,
 				cls: 'setting-item-description',
 			});
 		}
@@ -1759,9 +1705,11 @@ class DocsPublisherPlugin extends Plugin {
 			const fetched = await fetchResetContent(this.connection, target);
 			if (fetched.kind === 'failed') {
 				new Notice(
-					fetched.failure === 'insufficient-permission'
-						? resetPermissionMessage(fetched.detail)
-						: RESET_READ_FAILED_MESSAGE
+					fetched.failure === 'rejected-credential'
+						? EXPIRED_TOKEN_MESSAGE
+						: fetched.failure === 'insufficient-permission'
+							? tokenPermissionMessage('read the version under review', fetched.detail)
+							: RESET_READ_FAILED_MESSAGE
 				);
 				return;
 			}
@@ -1814,9 +1762,11 @@ class DocsPublisherPlugin extends Plugin {
 			const fetched = await fetchResetContent(this.connection, target);
 			if (fetched.kind === 'failed') {
 				new Notice(
-					fetched.failure === 'insufficient-permission'
-						? resetPermissionMessage(fetched.detail)
-						: RESET_READ_FAILED_MESSAGE
+					fetched.failure === 'rejected-credential'
+						? EXPIRED_TOKEN_MESSAGE
+						: fetched.failure === 'insufficient-permission'
+							? tokenPermissionMessage('read the version under review', fetched.detail)
+							: RESET_READ_FAILED_MESSAGE
 				);
 				return;
 			}

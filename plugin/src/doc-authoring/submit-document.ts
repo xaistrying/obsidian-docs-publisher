@@ -13,7 +13,11 @@ import {
 } from '../git-publishing/gitlab-client';
 import type { ActionSlot } from '../action-slot';
 import { BUSY_MESSAGE } from '../action-slot';
-import { EMPTY_REPOSITORY_MESSAGE } from '../platform-config/access-messages';
+import {
+	EMPTY_REPOSITORY_MESSAGE,
+	EXPIRED_TOKEN_MESSAGE,
+	tokenPermissionMessage,
+} from '../platform-config/access-messages';
 import type { ConnectionState } from '../platform-config/connection-state';
 import { resolveDocumentState } from '../submission-tracking/document-state';
 import { captureEditBaseline, listVaultDocuments } from '../submission-tracking/document-status';
@@ -1029,9 +1033,9 @@ async function clearAbandonedBranch(details: ConnectionDetails, branch: string):
 }
 
 /**
- * One undifferentiated failure per step — except the permission-scoped kind,
- * which names what's missing when GitLab reported it and which this change
- * leaves alone. No branch inspects *why* beyond that one classification.
+ * One undifferentiated failure per step — except the kinds whose fix is not
+ * "submit again": a rejected token, a missing permission, someone else's
+ * change, and an empty project.
  *
  * `message` is the step's own outcome, defaulting to the general one.
  * Clearing a previous attempt passes its own, because the author's situation
@@ -1042,17 +1046,30 @@ function reportFailure(
 	result: { failure: FailureKind; detail?: string },
 	message: string = SUBMIT_FAILED_MESSAGE
 ): void {
+	new Notice(failureMessage(result, message));
+}
+
+/** `reportFailure`'s choice of message, exported so it can be tested. */
+export function failureMessage(
+	result: { failure: FailureKind; detail?: string },
+	message: string = SUBMIT_FAILED_MESSAGE
+): string {
+	// Takes precedence over the step's own `message`: no step's message is
+	// true for a dead token, and "submit again" is exactly the wrong advice
+	// when retrying cannot succeed until the token changes.
+	if (result.failure === 'rejected-credential') {
+		return EXPIRED_TOKEN_MESSAGE;
+	}
+
 	if (result.failure === 'insufficient-permission') {
-		new Notice(insufficientPermissionMessage(result.detail, message));
-		return;
+		return tokenPermissionMessage('submit documents', result.detail);
 	}
 
 	// Takes precedence over the step's own `message` rather than deferring to
 	// it, and can do so safely: only a commit can be refused this way, and no
 	// step that passes its own message sends one.
 	if (result.failure === 'content-changed') {
-		new Notice(CONTENT_CHANGED_MESSAGE);
-		return;
+		return CONTENT_CHANGED_MESSAGE;
 	}
 
 	// Same precedence and the same reasoning. "The document could not be
@@ -1060,20 +1077,8 @@ function reportFailure(
 	// become non-empty by retrying, and this is the one failure whose fix is
 	// a thing the author does on the platform rather than in the plugin.
 	if (result.failure === 'empty-repository') {
-		new Notice(EMPTY_REPOSITORY_MESSAGE);
-		return;
+		return EMPTY_REPOSITORY_MESSAGE;
 	}
 
-	new Notice(message);
-}
-
-function insufficientPermissionMessage(detail: string | undefined, fallback: string): string {
-	if (detail === undefined) {
-		return fallback;
-	}
-
-	return (
-		`Your access token doesn't have permission to submit documents ` +
-		`(missing: ${detail}). Ask your admin to add it.`
-	);
+	return message;
 }

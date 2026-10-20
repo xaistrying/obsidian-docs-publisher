@@ -10,6 +10,13 @@
  * Kept out of `connection-state.ts`, which answers which band a state falls in
  * and holds no copy, and out of the panel, which owns only the copy that is
  * specific to being a panel.
+ *
+ * Also holds what an author is told about their access token. Each author
+ * creates their own token and its permissions cannot be edited once it
+ * exists, so these name what the author does themselves and never send them
+ * to an admin, who can neither renew nor extend someone else's token
+ * (`docs/access-tokens.md` §1). Every surface that meets a rejected token or
+ * a missing permission says it with these.
  */
 
 /**
@@ -54,3 +61,24 @@ export function readOnlyMessage(roleLabel: string): string {
 export const EMPTY_REPOSITORY_MESSAGE =
 	'This project has no files yet, so there is nothing to publish into. ' +
 	'Add a starting file to it in GitLab — a README will do — then try again.';
+
+/**
+ * A rejected token, wherever it is met. The same 401 means expired, revoked,
+ * or pasted wrongly; a truncated paste is the common first-day case and is
+ * fixed without creating anything, so it is named first.
+ */
+export const EXPIRED_TOKEN_MESSAGE =
+	'Your access token has expired or is incorrect. ' +
+	'Check you pasted all of it, or create a new one in GitLab.';
+
+/**
+ * A token missing a permission. Names the permission when the platform did;
+ * otherwise points at the list in settings rather than inventing a name,
+ * which would send someone to tick the wrong box.
+ */
+export function tokenPermissionMessage(action: string, detail: string | undefined): string {
+	const base = `Your access token doesn't have permission to ${action}`;
+	return detail === undefined
+		? `${base}. Create a new access token with the permissions listed in the plugin's settings.`
+		: `${base} (missing: ${detail}). Create a new access token that includes it.`;
+}
