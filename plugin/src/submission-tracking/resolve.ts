@@ -1,50 +1,14 @@
 import type { App, TFile } from 'obsidian';
-import type { SubmissionRecord } from './submission-record';
-import type { SubmissionStore } from './submission-store';
 
 /**
- * Resolves a note's tracking record by reading `doc_id` from its own front
- * matter — never from the note's current or original file path.
- * `docs/document-identity.md` §2-3: a document's path may change after its
- * first submit while `doc_id` does not, and reading front matter is the
- * same approach reconciliation uses one layer earlier.
+ * The one way the plugin reads a note's frozen `doc_id`: from its own front
+ * matter, never from the note's current or original path. A document's path may
+ * change after its first send while its `doc_id` does not
+ * (`docs/document-identity.md` §1 and §3).
  *
- * Returns null both when the note has no `doc_id` yet (never submitted) and
- * when a `doc_id` is present but no record matches it — this milestone does
- * not distinguish those two cases.
- */
-export function resolveSubmissionRecord(
-	app: App,
-	store: SubmissionStore,
-	file: TFile
-): SubmissionRecord | null {
-	const docId = readDocId(app, file);
-	if (docId === null) {
-		return null;
-	}
-
-	return store.get(docId) ?? null;
-}
-
-/**
- * `doc/<docId>` — the one place a document's branch name is derived.
- *
- * Exported because two callers need the same string for opposite reasons:
- * submit WRITES it, and reconciliation MATCHES against it. Deriving it twice
- * would let the two spellings drift, and the failure would be silent — every
- * document resolving as never submitted while its merge requests sit there
- * under the other spelling. See `docs/document-identity.md` §2.
- */
-export function branchForDocId(docId: string): string {
-	return `doc/${docId}`;
-}
-
-/**
- * The one way the plugin reads a note's frozen `doc_id`. Exported because
- * submit needs the same question answered before it derives one from the
- * filename (`docs/document-identity.md` §3: the frozen value is the identity
- * and the filename may drift away from it), and two readers of the same
- * field would be two places for that rule to diverge.
+ * Exported because the panel, Reset and Send all ask the same question of a
+ * note, and two readers of one field would be two places for that rule to
+ * diverge.
  */
 export function readDocId(app: App, file: TFile): string | null {
 	const frontmatter = app.metadataCache.getFileCache(file)?.frontmatter;

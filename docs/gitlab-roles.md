@@ -1,5 +1,10 @@
 # GitLab roles, and what they mean for this plugin
 
+> **SUPERSEDED 2026-10-22 by the change `replace-rest-with-local-git-ssh`.** The plugin no longer reads the
+> account's role: that needs the platform's API, which it no longer calls. It attempts the push, and a refusal
+> is told as "GitLab did not accept this document… Ask your admin for Developer access." Kept for history, and
+> for the one fact in it that still holds: a role predicts what will succeed and never proves it.
+
 Reference for how GitLab's access levels map onto the actions Docs Publisher
 performs. Written against the target instance: **GitLab Community Edition
 (CE) 19.4.0, self-managed**, project visibility **private**. Facts that

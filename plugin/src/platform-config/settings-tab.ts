@@ -1,281 +1,449 @@
-import { App, ButtonComponent, Plugin, PluginSettingTab, Setting } from 'obsidian';
-import type { ConnectionDetails, FailureKind } from '../git-publishing/gitlab-client';
-import { getCurrentUser, getProjectAccess } from '../git-publishing/gitlab-client';
-import { EMPTY_REPOSITORY_MESSAGE, EXPIRED_TOKEN_MESSAGE, tokenPermissionMessage } from './access-messages';
-import { hasConnectionDetails } from './connection';
-import type { ConnectionState, ConnectionStateHolder } from './connection-state';
-import type { SavedConnection } from '../submission-tracking/submission-store';
+import { PluginSettingTab, Setting } from 'obsidian';
+import type { App, Plugin, TextComponent } from 'obsidian';
+import type { ActionSlot } from '../action-slot';
+import { AUTHOR_MESSAGES } from '../author-messages';
+import { pressSetupControl } from './setup-actions';
+import type { SetupActionTargets } from './setup-actions';
+import type { SetupController } from './setup-controller';
+import type { GitResult } from '../git-publishing/failures';
+import type { RepoContext } from '../git-publishing/repo';
+import type { SetupStateHolder, SetupSnapshot } from './setup-state';
+import { backToDefault as removeFromVault, readAdvanced, scopeLabel, setForVault } from './advanced-settings';
+import type { AdvancedKey, AdvancedOutcome, AdvancedRow } from './advanced-settings';
+import { buildKeyControls, buildStepRows, noticeFor } from './setup-view';
+import type { SetupControl } from './setup-view';
 
 /**
- * All the settings tab needs from the plugin: the details, the outcome, and
- * a way to remember the two non-secret values (2026-09-30). The tab gets no
- * dependency on the store that writes them.
+ * What the tab needs, and no more. The tab draws; the controller acts; the
+ * holder is where the two meet and where the panel reads the same thing from.
  */
-export interface ConnectionHolder {
-	readonly connection: ConnectionDetails;
-	readonly connectionState: ConnectionStateHolder;
-	rememberConnection(saved: SavedConnection): Promise<void>;
+export interface SetupTabDeps {
+	controller: SetupController;
+	holder: SetupStateHolder;
+	slot: Pick<ActionSlot, 'current' | 'onChange'>;
+	targets: SetupActionTargets;
+	/** What the Advanced section reads and changes, in this vault's own settings. */
+	advanced: AdvancedPort;
 }
 
-const CHECKING_MESSAGE = 'Checking…';
-const EMPTY_FIELDS_MESSAGE = 'Fill in all three fields before testing the connection.';
+export interface AdvancedPort {
+	read(): Promise<GitResult<AdvancedRow[]>>;
+	set(key: AdvancedKey, value: string): Promise<AdvancedOutcome>;
+	clear(key: AdvancedKey): Promise<AdvancedOutcome>;
+}
 
-const FAILURE_MESSAGES: Record<FailureKind, string> = {
-	'rejected-credential': EXPIRED_TOKEN_MESSAGE,
-	'not-reachable':
-		'That project could not be found, or your access does not include it. Check the project ID above.',
-	'server-unreachable':
-		'Could not reach GitLab at that address. Check the address above and your connection, then try again.',
-	// REACHABLE as of 2026-09-29, and it was not before: the identity read is
-	// now classified as scoped, so a token missing `User: Read` lands here
-	// instead of on `not-reachable`'s "that project could not be found".
-	// `statusText` prefers `tokenPermissionMessage('check your connection')`
-	// below, which names the permission; this entry is the fallback for a
-	// refusal that names none.
-	'insufficient-permission': tokenPermissionMessage('check your account', undefined),
-	// Unreachable from "Test connection" for the same reason as the entry
-	// above: this check only reads, and content-changed is produced solely by
-	// a refused write. Present for the table's exhaustiveness.
-	'content-changed': 'Someone else changed this document. Open it in GitLab to see their changes.',
-	// Unreachable here too — "Test connection" reads the account and the
-	// project's access level, neither of which needs a branch. Present for
-	// exhaustiveness; the author meets this one at their first submit.
-	'empty-repository': EMPTY_REPOSITORY_MESSAGE,
-	'unexpected': 'The connection check did not succeed. Check the details above and try again.',
-};
+/** The port for a vault's repository: reads every layer, writes only this vault's own settings. */
+export function advancedPortFor(context: () => RepoContext): AdvancedPort {
+	return {
+		read: () => readAdvanced(context()),
+		set: (key, value) => setForVault(context(), key, value),
+		clear: (key) => removeFromVault(context(), key),
+	};
+}
 
-class ConnectionSettingTab extends PluginSettingTab {
-	private readonly holder: ConnectionHolder;
-	private statusEl: HTMLElement | null = null;
-	private testButton: ButtonComponent | null = null;
-	private unsubscribe: (() => void) | null = null;
+const MARKS = { done: '✓', current: '→', todo: '○' } as const;
 
-	constructor(app: App, plugin: Plugin & ConnectionHolder) {
+/**
+ * The settings tab: a project address, a key, and who the author is, under a
+ * list of the five steps (replace-rest-with-local-git-ssh task 1.9). It
+ * replaces the three-field token form, and shows the same steps as the panel's
+ * first screen, drawn from the same state, so a step finished here is shown
+ * there without either knowing the other exists.
+ *
+ * Built in pieces. The address field is made once and kept: it is the one
+ * thing the author types into here, and rebuilding a field that is being typed
+ * in loses the cursor. Everything around it is redrawn when setup changes, and
+ * a section is redrawn only if what it would show is different. A control that
+ * is pressed at the instant its section is rebuilt can lose the click: typing
+ * an address and then clicking a button blurs the field on the way down, which
+ * saves, which announces setup, which is the panel's own recorded race. So a
+ * save or a refresh that changes nothing must not touch the buttons.
+ */
+export class SetupSettingTab extends PluginSettingTab {
+	private readonly deps: SetupTabDeps;
+	private progressEl: HTMLElement | null = null;
+	private addressNoticeEl: HTMLElement | null = null;
+	private keyEl: HTMLElement | null = null;
+	private identityEl: HTMLElement | null = null;
+	private identityNoticeEl: HTMLElement | null = null;
+	private advancedEl: HTMLElement | null = null;
+	/** The rows as last read, and the one message about the last change. */
+	private advancedRows: AdvancedRow[] = [];
+	private advancedNotice: string | null = null;
+	/** Whether the section is open, kept across redraws: it is closed until the author opens it. */
+	private advancedOpen = false;
+	/** Ticked settings still waiting for a value to write; memory only, gone when the tab closes. */
+	private readonly advancedPending = new Set<AdvancedKey>();
+	private addressInput: TextComponent | null = null;
+	/** The author has typed in the address field since it was last saved. Only then is leaving the tab a save. */
+	private addressDirty = false;
+	/** What each section last drew, so an unchanged one is left alone. */
+	private drawn: { [section: string]: string } = {};
+	private unsubscribers: Array<() => void> = [];
+
+	constructor(app: App, plugin: Plugin, deps: SetupTabDeps) {
 		super(app, plugin);
-		this.holder = plugin;
+		this.deps = deps;
 	}
 
 	display(): void {
 		const { containerEl } = this;
 		containerEl.empty();
+		this.releaseSubscriptions();
+		this.drawn = {};
+		this.addressDirty = false;
 
-		// No section heading: the settings sidebar already names this tab, and a
-		// heading row here would carry a full setting-item's padding for one
-		// line of text.
-		containerEl.createEl('p', {
-			text:
-				'Your GitLab address and project ID are remembered after you test the connection. ' +
-				'Your access token is kept for this Obsidian session only and never written to disk, ' +
-				'so you paste it again after a restart.',
-			cls: 'setting-item-description',
-		});
+		containerEl.createEl('h2', { text: AUTHOR_MESSAGES.pluginName });
+		this.progressEl = containerEl.createDiv();
 
 		new Setting(containerEl)
-			.setName('GitLab address')
-			.setDesc('The address of your GitLab server, for example https://gitlab.example.com.')
-			.addText((text) =>
-				text
-					.setPlaceholder('https://gitlab.example.com')
-					.setValue(this.holder.connection.host)
-					.onChange((value) => {
-						this.holder.connection.host = value;
-						this.discardResult();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName('Project ID')
-			.setDesc(
-				'The numeric ID of the project, shown on its overview page in GitLab. ' +
-					'A namespace path like my-group/my-docs also works.'
-			)
-			.addText((text) =>
-				text
-					.setPlaceholder('12345678')
-					.setValue(this.holder.connection.projectId)
-					.onChange((value) => {
-						this.holder.connection.projectId = value;
-						this.discardResult();
-					})
-			);
-
-		new Setting(containerEl)
-			.setName('Access token')
-			.setDesc(
-				// Named, rather than left to an admin to guess, as of the
-				// 2026-09-22 verification run. This used to say "the exact
-				// permissions it needs are assigned by your admin", which was
-				// honest only because nobody knew them: GitLab exposes no
-				// endpoint reporting what a fine-grained token holds, so the
-				// list could only be learned by making each call against a
-				// deliberately under-scoped token and reading what the refusal
-				// named. That was done against the target instance, and the
-				// eight below are the complete set — each one confirmed
-				// necessary by a refusal, and the set confirmed sufficient by a
-				// run in which every call succeeded holding nothing else. See
-				// `docs/ce-verification.md` §A2.10.
-				//
-				// Grouped by the token screen's own tabs and worded to be
-				// forwarded verbatim to whoever creates the token. The User tab
-				// is called out because it is the one an author reading a list
-				// of "project permissions" will miss, and `User: Read` is what
-				// the FIRST call of Test connection needs — so missing it fails
-				// at step one, before anything else has been tried.
-				createFragment((desc) => {
-					desc.appendText(
-						'Create a fine-grained access token in GitLab, under User settings → ' +
-							'Access tokens, and tick exactly these:'
-					);
-					const list = desc.createEl('ul');
-					list.createEl('li', {
-						text:
-							'Group and project — Project (Read), Repository (Read), ' +
-							'Branch (Read, Delete), Commit (Create), Merge Request (Read, Create)',
-					});
-					list.createEl('li', {
-						text: 'User — User (Read). This is on the separate User tab, and is easy to miss.',
-					});
-					desc.appendText('Nothing else is needed.');
-				})
-			)
-			.addText((text) => {
-				text.inputEl.type = 'password';
-				text
-					.setPlaceholder('Paste your token')
-					.setValue(this.holder.connection.token)
-					.onChange((value) => {
-						this.holder.connection.token = value;
-						this.discardResult();
-					});
-			});
-
-		new Setting(containerEl)
-			.setName('Test connection')
-			.setDesc('Checks the details above and reports who the plugin connected as.')
-			.addButton((button) => {
-				this.testButton = button;
-				button.setButtonText('Test connection').onClick(() => {
-					void this.testConnection();
+			.setName(AUTHOR_MESSAGES.stepLabel2)
+			.setDesc(AUTHOR_MESSAGES.addressHint)
+			.addText((input) => {
+				this.addressInput = input;
+				input.setPlaceholder(AUTHOR_MESSAGES.addressPlaceholder);
+				input.setValue(this.snapshot().facts.address?.sshUrl ?? '');
+				input.inputEl.addEventListener('input', () => {
+					this.addressDirty = true;
+				});
+				// When the author leaves the field, not on every keystroke: an
+				// address half-typed is not an address to validate, and saving
+				// runs a process to re-read setup.
+				input.inputEl.addEventListener('blur', () => {
+					void this.leaveAddress(input);
 				});
 			});
+		this.addressNoticeEl = containerEl.createDiv();
+		this.keyEl = containerEl.createDiv();
+		this.identityEl = containerEl.createDiv();
+		this.identityNoticeEl = containerEl.createDiv();
+		this.advancedEl = containerEl.createDiv();
+		containerEl.createEl('p', { text: AUTHOR_MESSAGES.remembered, cls: 'setting-item-description' });
 
-		this.statusEl = containerEl.createDiv({ cls: 'setting-item-description' });
+		this.renderDynamic();
+		this.unsubscribers = [
+			this.deps.holder.onChange(() => this.renderDynamic()),
+			this.deps.slot.onChange(() => this.renderDynamic()),
+		];
 
-		// The tab renders the retained result rather than one it keeps privately,
-		// so reopening it mid-check needs no reconstruction: the shared state
-		// already says the check is running.
-		this.render(this.holder.connectionState.current);
-		this.unsubscribe = this.holder.connectionState.onChange((state) => {
-			this.render(state);
+		// Setup is read when the tab opens, so what it shows is what is saved
+		// and not what was last read, which is nothing at all if the panel has
+		// never been open this session. The field is filled in afterwards, unless
+		// the author has already started typing in it.
+		void this.deps.controller.refresh().then(() => {
+			const input = this.addressInput;
+			if (input !== null && !this.addressDirty) {
+				input.setValue(this.snapshot().facts.address?.sshUrl ?? '');
+			}
+			void this.loadAdvanced();
 		});
 	}
 
+	/**
+	 * Setup is read again when the tab closes, and an address typed and not yet
+	 * left is saved first: closing with Escape may remove the field before it
+	 * loses focus, and the edit would be lost. Only an edit is saved — an empty
+	 * field that was never typed in is a field that had not been filled yet, not
+	 * a request to forget the address.
+	 */
 	hide(): void {
-		if (this.unsubscribe !== null) {
-			this.unsubscribe();
-			this.unsubscribe = null;
+		this.releaseSubscriptions();
+		const input = this.addressInput;
+		const typed = input !== null && this.addressDirty ? input.getValue() : null;
+		void (async () => {
+			if (typed !== null) {
+				this.addressDirty = false;
+				await this.deps.controller.setAddress(typed);
+			}
+			await this.deps.controller.refresh();
+		})();
+	}
+
+	private snapshot(): SetupSnapshot {
+		return this.deps.holder.current;
+	}
+
+	private releaseSubscriptions(): void {
+		for (const stop of this.unsubscribers) {
+			stop();
+		}
+		this.unsubscribers = [];
+	}
+
+	private async leaveAddress(input: TextComponent): Promise<void> {
+		this.addressDirty = false;
+		const outcome = await this.deps.controller.setAddress(input.getValue());
+		// A refused address stays as typed so it can be corrected; anything else
+		// shows what was actually kept, which is the normalised form.
+		if (outcome !== 'invalid') {
+			input.setValue(this.snapshot().facts.address?.sshUrl ?? '');
 		}
 	}
 
+	private renderDynamic(): void {
+		if (
+			this.progressEl === null ||
+			this.addressNoticeEl === null ||
+			this.keyEl === null ||
+			this.identityEl === null ||
+			this.identityNoticeEl === null ||
+			this.advancedEl === null
+		) {
+			return;
+		}
+		const snapshot = this.snapshot();
+		const progressEl = this.progressEl;
+		const addressNoticeEl = this.addressNoticeEl;
+		const keyEl = this.keyEl;
+		const identityEl = this.identityEl;
+		const identityNoticeEl = this.identityNoticeEl;
+		const advancedEl = this.advancedEl;
+
+		const rows = buildStepRows(snapshot);
+		this.draw('progress', progressEl, rows, () => {
+			for (const row of rows) {
+				const text = `${MARKS[row.state]} ${row.label}`;
+				progressEl.createEl('div', { text, cls: row.state === 'current' ? 'mod-warning' : '' });
+			}
+		});
+
+		const addressNotice = noticeFor(snapshot, 2);
+		this.draw('address', addressNoticeEl, addressNotice, () => {
+			this.addNotice(addressNoticeEl, addressNotice);
+		});
+
+		const controls = buildKeyControls(snapshot, this.deps.slot.current);
+		const keyNotice = noticeFor(snapshot, 3);
+		const asksForName = this.asksForUsername(snapshot);
+		this.draw('key', keyEl, { controls, keyNotice, asksForName }, () => {
+			this.renderKey(keyEl, controls, keyNotice, asksForName);
+		});
+
+		// The fields and the message under them are drawn apart: a message about
+		// what was typed must not rebuild the fields and take the typing away.
+		const { identity, vaultConnected } = snapshot.facts;
+		this.draw('identity', identityEl, { identity, vaultConnected }, () => {
+			this.renderIdentity(identityEl, snapshot);
+		});
+		const identityNotice = noticeFor(snapshot, 5);
+		this.draw('identityNotice', identityNoticeEl, identityNotice, () => {
+			this.addNotice(identityNoticeEl, identityNotice);
+		});
+
+		this.draw('advanced', advancedEl, { rows: this.advancedRows, connected: vaultConnected, notice: this.advancedNotice, pending: Array.from(this.advancedPending) }, () => {
+			this.renderAdvanced(advancedEl, vaultConnected);
+		});
+	}
+
+	/** Redraws a section only if what it shows is different from last time. */
+	private draw(name: string, el: HTMLElement, shown: unknown, build: () => void): void {
+		const signature = JSON.stringify(shown);
+		if (this.drawn[name] === signature) {
+			return;
+		}
+		this.drawn[name] = signature;
+		el.empty();
+		build();
+	}
+
 	/**
-	 * Reads identity, then the author's access on the configured project. Kept
-	 * sequential so each failure is attributed to the right thing: a rejected
-	 * token surfaces from the identity read, an unreachable project from the
-	 * project read.
-	 *
-	 * Publishes each step into the shared state rather than rendering it here,
-	 * so every surface showing the connection follows along.
+	 * Asked for only when a test passed and the server did not say whose key it
+	 * is: typed once, remembered, and new documents carry it as their owner.
 	 */
-	private async testConnection(): Promise<void> {
-		const state = this.holder.connectionState;
-		if (state.current.kind === 'checking') {
-			return;
-		}
+	private asksForUsername(snapshot: SetupSnapshot): boolean {
+		const { key, username, address, testedFor } = snapshot.facts;
+		const tested =
+			key !== null &&
+			address !== null &&
+			testedFor !== null &&
+			testedFor.keyPath === key.path &&
+			testedFor.address === address.sshUrl;
+		return tested && (username === null || username === '');
+	}
 
-		const details = this.holder.connection;
-		if (!hasConnectionDetails(details)) {
-			this.setStatus(EMPTY_FIELDS_MESSAGE);
-			return;
-		}
-
-		// Remembered as typed, before the check and whatever its outcome: a
-		// check most often fails for a reason unrelated to these two values,
-		// such as an expired token. A failed save must not stop the author
-		// connecting this session (persist-connection-settings, 2026-09-30).
-		// Started, not awaited: awaiting here would let a second click through
-		// the `checking` guard above before the state below is set.
-		this.holder
-			.rememberConnection({ host: details.host, projectId: details.projectId })
-			.catch((error: unknown) => {
-				console.error('Docs Publisher: could not remember the connection details', error);
+	private renderKey(el: HTMLElement, controls: SetupControl[], notice: string | null, asksForName: boolean): void {
+		const keySetting = new Setting(el).setName(AUTHOR_MESSAGES.settingsKeyName).setDesc(AUTHOR_MESSAGES.keyIntro);
+		for (const control of controls) {
+			keySetting.addButton((button) => {
+				button.setButtonText(control.label);
+				button.setDisabled(control.disabled);
+				button.onClick(() => {
+					pressSetupControl(control.id, this.deps.targets);
+				});
 			});
+		}
+		this.addNotice(el, notice);
 
-		state.set({ kind: 'checking' });
-		try {
-			const identity = await getCurrentUser(details);
-			if (!identity.ok) {
-				state.set({
-					kind: 'failed',
-					failure: identity.failure,
-					identity: null,
-					detail: identity.detail,
+		if (asksForName) {
+			new Setting(el)
+				.setName(AUTHOR_MESSAGES.settingsUsernameName)
+				.setDesc(AUTHOR_MESSAGES.usernamePrompt)
+				.addText((input) => {
+					input.inputEl.addEventListener('blur', () => {
+						void this.deps.controller.setUsername(input.getValue());
+					});
 				});
-				return;
-			}
-
-			const access = await getProjectAccess(details);
-			if (!access.ok) {
-				state.set({
-					kind: 'failed',
-					failure: access.failure,
-					identity: identity.value,
-					detail: access.detail,
-				});
-				return;
-			}
-
-			state.set({ kind: 'verified', identity: identity.value, access: access.value });
-		} catch {
-			state.set({ kind: 'failed', failure: 'unexpected', identity: null });
 		}
 	}
 
 	/**
-	 * Editing any of the three values discards the retained result, so a
-	 * verified person is never reported alongside details they were not
-	 * verified against. Deliberately does not start a new check.
+	 * The name and email, from wherever they are set. Read-only until the vault
+	 * is connected, because saving writes this vault's own git settings and those
+	 * exist only then; afterwards they can be changed, and are saved for this
+	 * vault alone, never to the computer's settings.
 	 */
-	private discardResult(): void {
-		this.holder.connectionState.set({ kind: 'unverified' });
-	}
+	private renderIdentity(el: HTMLElement, snapshot: SetupSnapshot): void {
+		const { identity, vaultConnected } = snapshot.facts;
+		const where =
+			identity?.scope === 'vault'
+				? AUTHOR_MESSAGES.scopeVault
+				: identity?.scope === 'computer'
+					? AUTHOR_MESSAGES.scopeComputer
+					: identity?.scope === 'system'
+						? AUTHOR_MESSAGES.scopeSystem
+						: '';
+		const description = vaultConnected
+			? where
+			: [AUTHOR_MESSAGES.identityReadonly, where].filter((part) => part !== '').join(' ');
 
-	private render(state: ConnectionState): void {
-		if (this.testButton !== null) {
-			this.testButton.setDisabled(state.kind === 'checking');
+		let name: TextComponent | null = null;
+		let email: TextComponent | null = null;
+		const setting = new Setting(el).setName(AUTHOR_MESSAGES.stepLabel5).setDesc(description);
+		setting.addText((input) => {
+			name = input;
+			input.setPlaceholder(AUTHOR_MESSAGES.namePlaceholder);
+			input.setDisabled(!vaultConnected);
+			input.setValue(identity === null ? '' : identity.name);
+		});
+		setting.addText((input) => {
+			email = input;
+			input.setPlaceholder(AUTHOR_MESSAGES.emailPlaceholder);
+			input.setDisabled(!vaultConnected);
+			input.setValue(identity === null ? '' : identity.email);
+		});
+		if (vaultConnected) {
+			setting.addButton((button) => {
+				button.setButtonText(AUTHOR_MESSAGES.saveIdentity);
+				button.onClick(() => {
+					const typedName = name as TextComponent | null;
+					const typedEmail = email as TextComponent | null;
+					if (typedName !== null && typedEmail !== null) {
+						void this.deps.controller.saveIdentity(typedName.getValue(), typedEmail.getValue());
+					}
+				});
+			});
 		}
-		this.setStatus(this.statusText(state));
 	}
 
-	private statusText(state: ConnectionState): string {
-		switch (state.kind) {
-			case 'unverified':
-				return '';
-			case 'checking':
-				return CHECKING_MESSAGE;
-			case 'verified':
-				return `Connected as ${state.identity.name} — ${state.access.accessLabel} access`;
-			case 'failed':
-				return state.failure === 'insufficient-permission'
-					? tokenPermissionMessage('check your connection', state.detail)
-					: FAILURE_MESSAGES[state.failure];
+	/** Reads the three settings again, then draws them. A vault with no repository has nothing to read, and shows none. */
+	private async loadAdvanced(): Promise<void> {
+		const rows = await this.deps.advanced.read();
+		this.advancedRows = rows.ok ? rows.value : [];
+		this.renderDynamic();
+	}
+
+	/** Runs one change, says what went wrong if it did, and reads the rows again. */
+	private async changeAdvanced(change: () => Promise<AdvancedOutcome>): Promise<void> {
+		const outcome = await change();
+		if (outcome.ok) {
+			this.advancedNotice = null;
+		} else {
+			this.advancedNotice = 'message' in outcome ? outcome.message : AUTHOR_MESSAGES.setupUnexpected;
 		}
+		await this.loadAdvanced();
 	}
 
-	private setStatus(text: string): void {
-		if (this.statusEl !== null) {
-			this.statusEl.setText(text);
+	/**
+	 * Writes a ticked setting's value. With no value yet, the tick is kept and the
+	 * text box opens for one; a value that is refused keeps the tick too, with
+	 * the reason, so the author can correct it instead of starting again.
+	 */
+	private async tickAdvanced(key: AdvancedKey, value: string): Promise<void> {
+		if (value.trim() === '') {
+			this.advancedPending.add(key);
+			this.advancedNotice = null;
+			this.renderDynamic();
+			return;
+		}
+		const outcome = await this.deps.advanced.set(key, value);
+		if (outcome.ok) {
+			this.advancedPending.delete(key);
+			this.advancedNotice = null;
+		} else {
+			this.advancedPending.add(key);
+			this.advancedNotice = 'message' in outcome ? outcome.message : AUTHOR_MESSAGES.setupUnexpected;
+		}
+		await this.loadAdvanced();
+	}
+
+	/**
+	 * The Advanced section: a fixed short list, closed until opened. Each row has a
+	 * tick (this vault has its own value), the value, where it comes from, and
+	 * "Back to default". A value from the computer or the system is shown and
+	 * never edited; ticking it writes this vault's own and leaves theirs alone.
+	 * Nothing here changes how documents are sent or received.
+	 */
+	private renderAdvanced(el: HTMLElement, connected: boolean): void {
+		const details = el.createEl('details');
+		details.open = this.advancedOpen;
+		details.addEventListener('toggle', () => {
+			this.advancedOpen = details.open;
+		});
+		details.createEl('summary', { text: AUTHOR_MESSAGES.advancedHeading });
+		details.createEl('p', { text: AUTHOR_MESSAGES.advancedNote, cls: 'setting-item-description' });
+		if (!connected) {
+			details.createEl('p', { text: AUTHOR_MESSAGES.advancedUnconnected, cls: 'setting-item-description' });
+		}
+
+		for (const row of this.advancedRows) {
+			const where = row.effective === null ? '' : scopeLabel(row.effective.scope);
+			let text: TextComponent | null = null;
+			// A tick with no value to write yet stays on, waiting for one: writing an
+			// empty value is refused, and redrawing from git would switch it straight
+			// back off, so nothing could ever be typed.
+			const waiting = this.advancedPending.has(row.key);
+			const setting = new Setting(details).setName(row.key).setDesc(where);
+			setting.addToggle((toggle) => {
+				toggle.setValue(row.ticked || waiting);
+				toggle.setDisabled(!connected);
+				toggle.onChange((on) => {
+					if (!on) {
+						this.advancedPending.delete(row.key);
+						void this.changeAdvanced(() => this.deps.advanced.clear(row.key));
+						return;
+					}
+					const typed = text === null ? '' : (text as TextComponent).getValue().trim();
+					const value = typed !== '' ? typed : row.effective === null ? '' : row.effective.value;
+					void this.tickAdvanced(row.key, value);
+				});
+			});
+			setting.addText((input) => {
+				text = input;
+				input.setValue(row.effective === null ? '' : row.effective.value);
+				// A value that is not this vault's own is shown and cannot be typed over.
+				input.setDisabled(!connected || !(row.ticked || waiting));
+				input.inputEl.addEventListener('blur', () => {
+					const typed = input.getValue().trim();
+					if ((row.ticked || waiting) && typed !== '' && typed !== (row.effective?.value ?? '')) {
+						void this.tickAdvanced(row.key, typed);
+					}
+				});
+			});
+			setting.addButton((button) => {
+				button.setButtonText(AUTHOR_MESSAGES.backToDefault);
+				button.setDisabled(!connected || !(row.ticked || waiting));
+				button.onClick(() => {
+					this.advancedPending.delete(row.key);
+					void this.changeAdvanced(() => this.deps.advanced.clear(row.key));
+				});
+			});
+		}
+		this.addNotice(details, this.advancedNotice);
+	}
+
+	private addNotice(el: HTMLElement, text: string | null): void {
+		if (text !== null) {
+			el.createEl('p', { text, cls: 'setting-item-description' });
 		}
 	}
 }
-
-export { ConnectionSettingTab };

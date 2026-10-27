@@ -1,7 +1,7 @@
 {
   "name": "obsidian-docs-publisher",
-  "version": "0.1.0",
-  "description": "Publish SOP documentation directly to GitLab from Obsidian",
+  "version": "0.2.0",
+  "description": "Publish SOP documentation to GitLab from Obsidian, over SSH",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",

@@ -12,6 +12,33 @@ picking one.
 
 ---
 
+> **AMENDED 2026-10-26 by `panel-by-path-without-doc-id`.** The decisions in §§1-4 about `doc_id` as a property
+> frozen into the note at first submit are REPLACED, and what they protected is kept:
+>
+> - **A note carries no `doc_id`.** Submit no longer writes one, and one an older version wrote is left in the
+>   note, read as an alias for the same identity, and never rewritten or removed.
+> - **Identity is derived, in a fixed order** (design D1): a legacy `doc_id`; else the project's file at the note's
+>   path; else the document whose last send from this vault carried that path; else an exact content match
+>   against a version this vault knows at a path now absent from the vault. First step that yields exactly one
+>   document wins; two candidates give none. Never similarity: a wrong guess ties a note to someone else's
+>   review. `plugin/src/submission-tracking/resolve-notes.ts` is the one place this is written.
+> - **The branch is still `doc/<id>`**, with `<id>` derived from the file name at FIRST SUBMIT by the rules in §3
+>   (so `docs/document-naming.md` stands). After that it is not re-derived from the live file name: a note
+>   matched to a document uses that document's id, so a rename does not rename the branch. This is the part of
+>   §1 that survives, and it now holds without a stored value.
+> - **The send record's path is read from the commit**, not stored: `sent/<id>` points at a commit this vault
+>   built, and the one markdown file that commit changed is the path of the send.
+> - **§4's "REFUSE TO MOVE" is REVERSED.** A moved note is sent at its new path and the old path is removed in
+>   the same commit, after the author confirms in plain words. It is the only case where Submit removes a file,
+>   it removes only the document's own old note and never an attachment, and it is refused when the project's
+>   copy at the old path is not the version this vault last knew, so a move cannot discard someone else's later
+>   edit. A new path that the project already holds is refused with the existing "already exists at this path"
+>   message. Reorganising a published document is therefore no longer out of scope.
+> - **Duplicates.** Two copies of one note's exact bytes in the vault match neither, since which is the moved one
+>   cannot be told; both are listed as not sent until one is removed.
+>
+> Everything below is the record of the earlier decisions and is read in that light.
+
 ## 1. Branch naming, and its lifetime
 
 - Branch naming: `doc/<doc_id>`. The branch name is derived from
@@ -52,6 +79,18 @@ picking one.
   merged ones, and possibly a current open one.
 
 ## 2. Reconciliation — reconnecting a note to its merge request
+
+> **AMENDED 2026-10-22 by `replace-rest-with-local-git-ssh`.** There is no reconciliation by merge request any
+> more, because the plugin no longer lists merge requests. A document's state is DERIVED from the fetched
+> copy of the project, by identity: `B` is `doc/<doc_id>`, `M` the default branch, and a review is live when
+> `B` exists and a file it changed differs from `M`'s copy, so a branch left behind after a merge, a squash
+> merge included, is not live. Not live with a file at the document's path on `M` is published; not live
+> with none is "Not accepted". The path is found by identity (the one markdown file `B` changed, else the one
+> path on `M` whose file name derives the `doc_id`), not from where the note sits. Design D8 has the rules;
+> `plugin/src/submission-tracking/derive-state.ts` is the one place they are written. What is said below about
+> querying merge requests, and about the open one winning, is the REST-era record and no longer applies. The
+> reasoning that does survive: do not look only at open reviews, because a rejected document would then read
+> as never sent; the derivation counts a branch that is still there but changes nothing as finished.
 
 - Reconciliation: a note whose local pointer is missing is reconnected
   by reading `doc_id` from its front matter and querying merge requests
@@ -163,6 +202,13 @@ picking one.
   the import itself created.
 
 ## 4. Paths — vault mirroring, refusing to move, reorganization
+
+> **ADDED 2026-10-22.** Two comparisons in this section, a note's path against its document's path on the
+> project, and whether a name is already taken, are written to be aware that some file systems treat
+> `Known-errors/` and `known-errors/` as one folder (Windows, and macOS by default) and git does not. The
+> comparison of paths stays case-sensitive, because that is what the project's tree is; what is guarded
+> against is the author on such a computer being shown two names that differ only in case as one. Getting
+> updates does the same for names that would land on one file (`docs/document-naming.md`).
 
 - VAULT ROOT = REPO ROOT. DECIDED 2026-08-26, replacing a
   `docs/<category>/<filename>` routing scheme that was in play but was

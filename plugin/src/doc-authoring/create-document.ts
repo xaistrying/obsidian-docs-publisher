@@ -1,8 +1,7 @@
 import { Notice, normalizePath } from 'obsidian';
 import type { App, TFile, TFolder } from 'obsidian';
-import type { ConnectionDetails } from '../git-publishing/gitlab-client';
-import type { ConnectionState } from '../platform-config/connection-state';
-import { requireAuthoringGate } from './authoring-gate';
+import { AUTHOR_MESSAGES } from '../author-messages';
+import { GITLAB_USERNAME } from '../git-publishing/project-address';
 import { composeFrontMatter } from './front-matter';
 
 export const CREATE_FAILED_MESSAGE = 'The document could not be created. Try again.';
@@ -20,25 +19,22 @@ const DEFAULT_BASE_NAME = 'Untitled document';
  *
  * Every entry point comes through here — the panel control and the command
  * palette both — so neither can behave differently from the other, and hiding
- * a control is never what enforces the gate.
+ * a control is never what enforces the gate. The gate itself, that setup is
+ * complete, is the caller's, and is checked first.
  *
- * Makes no request to the platform: the identity comes from the connection
- * result the session already retains, so this works with the network down and
- * `git-publishing` stays the sole owner of remote access.
+ * Makes no request and starts no process: the owner is the username the last
+ * successful key test reported (or the author typed), remembered from an
+ * earlier session, so this works with the network down.
  */
-export async function createDocument(
-	app: App,
-	details: ConnectionDetails,
-	state: ConnectionState
-): Promise<void> {
-	const gate = requireAuthoringGate(details, state);
-	if (gate === null) {
+export async function createDocument(app: App, owner: string): Promise<void> {
+	// Written into front matter unquoted, so only what GitLab allows in a
+	// username may go there. A name that fails this came from a hand-edited
+	// settings file, and is refused rather than repaired.
+	if (!GITLAB_USERNAME.test(owner)) {
+		new Notice(AUTHOR_MESSAGES.notReady);
 		return;
 	}
-
-	// The username as the platform reports it — never the display name or the
-	// local part of an email address.
-	const username = gate.identity.username;
+	const username = owner;
 
 	// The folder Obsidian itself would use for a new note, honouring the
 	// vault's "Default location for new notes". Passing the active file's path

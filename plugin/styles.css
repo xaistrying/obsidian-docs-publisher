@@ -25,7 +25,7 @@
    Heading and Refresh share a row so the control sits with what it refreshes
    rather than floating above the whole panel. */
 .docs-publisher-documents {
-	margin-top: var(--size-4-4);
+	margin-top: var(--size-4-5);
 }
 
 .docs-publisher-documents-header {
@@ -33,34 +33,277 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: var(--size-4-2);
+	padding: var(--size-4-1) 0;
 }
 
 .docs-publisher-documents-header h4 {
 	margin: 0;
 }
 
-.docs-publisher-document-list {
-	list-style: none;
-	margin: var(--size-4-2) 0 0;
-	padding: 0;
+/* The body of a group lines up under its title, not under its chevron. */
+.docs-publisher-documents > .docs-publisher-document-list,
+.docs-publisher-documents > p {
+	margin-left: var(--size-4-6);
 }
 
-/* Name, state and link on one wrapping row. The name takes the slack so the
-   state and link stay together at the right rather than drifting apart as
-   names vary in length. */
-.docs-publisher-document {
+.docs-publisher-chevron {
+	display: flex;
+	flex: 0 0 auto;
+	color: var(--text-muted);
+}
+
+.docs-publisher-chevron svg {
+	width: 16px;
+	height: 16px;
+}
+
+/* Group headings are labels, not page headings: the theme's h4 is large and
+   coloured, and three of them stacked outweighed the rows beneath. */
+.docs-publisher-documents h4 {
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-semibold);
+}
+
+/* The top of the ready screen: who is connected, a banner saying what the
+   project has, the actions, and a rule under them. */
+.docs-publisher-header {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-3);
+	margin-bottom: var(--size-4-4);
+}
+
+.docs-publisher-avatar {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	justify-content: center;
+	width: 36px;
+	height: 36px;
+	border-radius: 50%;
+	background-color: var(--interactive-accent);
+	color: var(--text-on-accent);
+	font-size: var(--font-ui-small);
+	font-weight: var(--font-semibold);
+}
+
+.docs-publisher-who {
+	min-width: 0;
+}
+
+.docs-publisher-who-name {
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-normal);
+	font-weight: var(--font-semibold);
+}
+
+/* A green dot before "Connected". */
+.docs-publisher-who-status {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-1);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+}
+
+.docs-publisher-who-status::before {
+	content: '';
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background-color: var(--color-green);
+}
+
+.docs-publisher-banner {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	margin-bottom: var(--size-4-4);
+	padding: var(--size-4-2) var(--size-4-3);
+	border-radius: var(--radius-m);
+	background-color: var(--background-secondary);
+	font-size: var(--font-ui-small);
+}
+
+.docs-publisher-banner-icon {
+	display: flex;
+	flex: 0 0 auto;
+}
+
+.docs-publisher-banner-icon svg {
+	width: 16px;
+	height: 16px;
+}
+
+.docs-publisher-banner.is-latest .docs-publisher-banner-icon {
+	color: var(--color-green);
+}
+
+.docs-publisher-banner.is-waiting .docs-publisher-banner-icon {
+	color: var(--interactive-accent);
+}
+
+.docs-publisher-banner.is-failed .docs-publisher-banner-icon {
+	color: var(--text-error);
+}
+
+.docs-publisher-toolbar {
 	display: flex;
 	flex-wrap: wrap;
-	align-items: baseline;
-	gap: var(--size-4-1) var(--size-4-2);
-	padding: var(--size-4-1) 0;
+	align-items: stretch;
+	gap: var(--size-4-2);
+	margin-bottom: var(--size-4-4);
+}
+
+/* New document takes the width; the two icon buttons keep a square. */
+.docs-publisher-new {
+	display: flex;
+	flex: 1 1 auto;
+	align-items: center;
+	justify-content: center;
+	gap: var(--size-4-2);
+}
+
+.docs-publisher-button-icon {
+	display: flex;
+}
+
+.docs-publisher-toolbar button:not(.docs-publisher-new) {
+	flex: 0 0 auto;
+}
+
+/* Get updates while something is waiting: marked, not primary, so it does not
+   compete with New document. */
+.docs-publisher-toolbar button.is-attention {
+	border-color: var(--interactive-accent);
+	color: var(--interactive-accent);
+}
+
+.docs-publisher-divider {
+	margin-bottom: var(--size-4-1);
 	border-bottom: 1px solid var(--background-modifier-border);
 }
 
+.docs-publisher-document-list {
+	list-style: none;
+	margin: var(--size-4-1) 0 0;
+	padding: 0;
+}
+
+/* A row is two lines: the name with its buttons at the right, then what it is
+   and where it lives, muted. The name takes the slack and is cut with an
+   ellipsis (the full path is the row's tooltip), so a long name never pushes the
+   buttons off the panel. */
+.docs-publisher-document {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: var(--size-2-1) var(--size-4-2);
+	padding: var(--size-4-2) var(--size-4-2);
+	border-bottom: 1px solid var(--background-modifier-border);
+}
+
+.docs-publisher-document:last-child {
+	border-bottom: none;
+}
+
+.docs-publisher-document.is-current {
+	box-shadow: inset 2px 0 0 var(--interactive-accent);
+}
+
+.docs-publisher-document.is-active {
+	background-color: var(--background-modifier-hover);
+	border-radius: var(--radius-m);
+}
+
 .docs-publisher-document-name {
-	flex: 1 1 auto;
+	flex: 1 1 0;
 	min-width: 0;
-	overflow-wrap: anywhere;
+	color: var(--text-normal);
+	font-size: var(--font-ui-small);
+	line-height: 1.4;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
+
+.docs-publisher-row-actions {
+	display: flex;
+	flex: 0 0 auto;
+	align-items: center;
+	gap: var(--size-4-1);
+}
+
+.docs-publisher-row-actions button {
+	height: 26px;
+	padding: 0 var(--size-4-2);
+}
+
+.docs-publisher-row-actions .svg-icon {
+	width: 14px;
+	height: 14px;
+}
+
+.docs-publisher-row-meta {
+	display: flex;
+	flex: 1 1 100%;
+	flex-direction: column;
+	gap: var(--size-2-1);
+	min-width: 0;
+}
+
+/* A status with a coloured dot: orange while it waits on someone, green when
+   done, red when it needs fixing, blue when it was moved. */
+.docs-publisher-status {
+	display: flex;
+	align-items: center;
+	gap: var(--size-4-2);
+	color: var(--text-muted);
+	font-size: var(--font-ui-smaller);
+	white-space: nowrap;
+}
+
+.docs-publisher-status::before {
+	content: '';
+	flex: 0 0 auto;
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background-color: var(--text-faint);
+}
+
+.docs-publisher-status.status-pending::before,
+.docs-publisher-status.status-edited::before,
+.docs-publisher-status.status-changed::before {
+	background-color: var(--color-orange);
+}
+
+.docs-publisher-status.status-published::before,
+.docs-publisher-status.status-added::before {
+	background-color: var(--color-green);
+}
+
+.docs-publisher-status.status-closed::before,
+.docs-publisher-status.status-removed::before,
+.docs-publisher-status.status-deleted-here::before {
+	background-color: var(--color-red);
+}
+
+.docs-publisher-status.status-moved::before {
+	background-color: var(--color-blue);
+}
+
+.docs-publisher-document-folder {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+	color: var(--text-faint);
+	font-size: var(--font-ui-smaller);
+	line-height: 1.3;
 }
 
 /* A short state marker — "Waiting for review", "Not available". `nowrap` is
@@ -84,11 +327,17 @@
 	white-space: nowrap;
 }
 
-/* The marker itself. Warning rather than accent: in many themes the accent IS
-   the link colour, and a marker that looks like "Open in GitLab" reads as
-   something to click. */
-.docs-publisher-document-edited {
-	color: var(--text-warning);
+
+/* The moved marker: information, not a warning, so it stays muted like the
+   state it sits beside and is told apart from it by style alone. */
+
+/* A "Not sent yet" row: name and folder take the slack, the Submit button
+   keeps its size at the right. */
+.docs-publisher-document > .docs-publisher-document-state {
+	flex: 0 1 auto;
+	min-width: 0;
+	overflow-wrap: anywhere;
+	white-space: normal;
 }
 
 .docs-publisher-document-link {
@@ -158,6 +407,9 @@
    rather than competing with it, and it is the only thing a collapsed section
    says beyond its own name. */
 .docs-publisher-section-count {
+	padding: 0 var(--size-4-2);
+	border-radius: var(--radius-l);
+	background-color: var(--background-modifier-hover);
 	color: var(--text-muted);
 	font-size: var(--font-ui-smaller);
 	white-space: nowrap;
@@ -178,4 +430,64 @@
 .docs-publisher-section-actions {
 	display: flex;
 	margin: var(--size-4-2) 0;
+}
+
+/* Responsive layout. The panel is as wide as the author drags it, so these
+   follow the panel's own width (a container query on the view's content), not
+   the window's. Narrow: the buttons share a row under a full-width New
+   document, and a row's buttons drop under its text instead of squeezing the
+   name away. Wide: the icon buttons say what they are, and a row's status and
+   folder share one line. */
+.docs-publisher-root {
+	container-type: inline-size;
+}
+
+.docs-publisher-button-label {
+	display: none;
+}
+
+@container (max-width: 250px) {
+	.docs-publisher-new {
+		flex: 1 1 100%;
+	}
+
+	.docs-publisher-toolbar button:not(.docs-publisher-new) {
+		flex: 1 1 0;
+	}
+
+	.docs-publisher-document-name {
+		flex-basis: 100%;
+	}
+
+	.docs-publisher-row-meta {
+		order: 1;
+	}
+
+	.docs-publisher-row-actions {
+		order: 2;
+		margin-top: var(--size-4-1);
+	}
+}
+
+@container (max-width: 190px) {
+	.docs-publisher-avatar,
+	.docs-publisher-banner-icon {
+		display: none;
+	}
+}
+
+@container (min-width: 360px) {
+	.docs-publisher-toolbar button:not(.docs-publisher-new) {
+		gap: var(--size-4-2);
+	}
+
+	.docs-publisher-button-label {
+		display: inline;
+	}
+
+	.docs-publisher-row-meta {
+		flex-direction: row;
+		flex-wrap: wrap;
+		gap: var(--size-2-1) var(--size-4-4);
+	}
 }

@@ -1,5 +1,11 @@
 # Access tokens: type, storage, and what the connection check proves
 
+> **SUPERSEDED 2026-10-22 by the change `replace-rest-with-local-git-ssh`.** The plugin no longer uses an access
+> token: it uses the author's own SSH key, and git over SSH. Read `docs/ssh-setup.md` for how a key is chosen,
+> created and used, and for the security trade-offs that replace this file's. Everything below is kept as
+> the record of the token era (the REST client it describes is deleted), and nothing in it describes how
+> the plugin works now.
+
 > Filed as `access-tokens.md`, not `credentials.md`: tooling that guards
 > against reading secret files blocks paths named for credentials, which would
 > make this reference unreadable to the agents it exists for. It contains no

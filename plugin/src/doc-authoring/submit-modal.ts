@@ -1,11 +1,20 @@
 import { Modal, Setting } from 'obsidian';
 import type { App, ButtonComponent, TFile } from 'obsidian';
+import { AUTHOR_MESSAGES } from '../author-messages';
 import type { Category } from './categories';
 import { CATEGORIES } from './categories';
 
 export interface SubmitModalResult {
 	title: string;
 	category: Category;
+}
+
+/** What the dialog says beyond the note's own fields. */
+export interface SubmitModalContext {
+	/** Where the document is being sent: the server and the project. Named so an address changed by hand cannot send anywhere unseen. */
+	destination: string;
+	/** The note is a published document being revised, which reviewers will see as a change. */
+	replacesPublished: boolean;
 }
 
 /**
@@ -44,7 +53,8 @@ export class SubmitModal extends Modal {
 		 * its presence is what selects the read-only shape — there is no
 		 * separate mode flag to keep in step with it.
 		 */
-		private readonly existing?: SubmitModalResult
+		private readonly existing: SubmitModalResult | undefined,
+		private readonly about: SubmitModalContext
 	) {
 		super(app);
 		if (existing !== undefined) {
@@ -69,6 +79,10 @@ export class SubmitModal extends Modal {
 		}
 
 		new Setting(contentEl).setName('Target path').setDesc(this.file.path);
+		new Setting(contentEl).setName(AUTHOR_MESSAGES.sendingTo).setDesc(this.about.destination);
+		if (this.about.replacesPublished) {
+			contentEl.createEl('p', { text: AUTHOR_MESSAGES.replacesPublished, cls: 'setting-item-description' });
+		}
 
 		new Setting(contentEl).addButton((button) => {
 			this.submitButton = button;

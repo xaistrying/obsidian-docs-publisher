@@ -1,5 +1,11 @@
 # Verifying this plugin against a real GitLab instance
 
+> **UPDATED 2026-10-23 by `replace-rest-with-local-git-ssh`.** Sections A to E check the REST API and the access
+> token, which the plugin no longer uses; they are kept as the record. **Section F below is the live checklist**:
+> what has NOT been confirmed about git over SSH on the target, with what breaks if each assumption is wrong.
+> Run it on the target (self-managed CE, see the table in §0) against a scratch project, and record results in
+> the table there, not in a change's tasks.
+
 Every remote behaviour this plugin depends on was established against
 **gitlab.com** (SaaS, Enterprise Edition, continuous deployment). The target
 instance is **self-managed Community Edition 19.3.0**. Those are not the same
@@ -2881,6 +2887,29 @@ the default — and the stranded `doc/…` branch's content is the document,
 recoverable by hand.
 
 ---
+
+## F. Git over SSH on the target (replace-rest-with-local-git-ssh)
+
+Nothing in this section has been confirmed on the target. The plugin was built and tested against real git and a
+stand-in server that runs the server's half of a push on a local bare repository, so the commands, the order and
+the refusals are exercised; what is NOT exercised is what GitLab itself prints and does. The fixtures for those
+lines are provisional until recorded here (tasks 3.10, 1.7 and 1.3).
+
+For each: do it by hand in a terminal first, then through the plugin, and write down the exact lines.
+
+| # | Check | Expect | If it is wrong |
+|---|---|---|---|
+| F1 | `ssh -T git@<host>` with a registered key | `Welcome to GitLab, @<username>!` on stdout or stderr | The author is asked to type a username once. Nothing breaks. |
+| F2 | Open `<host>/-/user_settings/ssh_keys` | The author's SSH keys page | "Open GitLab" lands on the wrong page. Change `sshKeysPageUrl`. |
+| F3 | `git ls-remote --symref git@<host>:<path> HEAD` | `ref: refs/heads/<default>\tHEAD` and a commit; nothing at all for a project with no commits | Default-branch reading and the empty-project message. |
+| F4 | `git push -o merge_request.create -o merge_request.target=<default> -o merge_request.title=T -o merge_request.remove_source_branch <url> <sha>:refs/heads/doc/x` | A review request opens, and `remote: View merge request for doc/x:` with a link | The reply parser: it would report "sent, no review request" for a request that was opened. The fallback already handles the opposite. |
+| F5 | Merge that request in GitLab | The source branch is removed | A branch left behind after a merge is not "waiting" (derived as published), but accumulates. |
+| F6 | Push again to the same branch with `merge_request.create` while it is open | No second request | A duplicate request per update. If it duplicates, drop the option from updates (they carry a parent that is the branch tip). |
+| F7 | Push with push options to a server or project that ignores them | `remote: To create a merge request for doc/x, visit:` and a link | The "Open to request review" control gets no link; one is derived from the address as a fallback. |
+| F8 | Record stderr for: an unregistered key, a project that does not exist or is not visible, an account without write access, a protected branch | The phrases in `git-failures.test.ts` | Misclassified failures read as the generic message. |
+| F9 | Push a document branch as a Developer; push the default branch as a Developer | The first works, the second is refused (the default branch is protected) | The trade-off recorded in `docs/ssh-setup.md`: an author's key could publish without review. |
+| F10 | Push options at all: `git push -o x ...` | Accepted | The plugin retries once without them and reports "sent, no review request". Check that exactly one commit arrives. |
+| F11 | Edit a note while Get updates is running | Every keystroke is kept (task 4.6) | An update that overwrites typing. |
 
 ## Recording what you find
 

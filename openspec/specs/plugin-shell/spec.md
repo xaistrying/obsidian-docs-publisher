@@ -2,10 +2,9 @@
 
 ## Purpose
 
-This capability defines the foundational plugin shell: the core infrastructure that allows the Obsidian plugin to load, register a sidebar view, and expose entry points for opening that view. This is the baseline all future plugin capabilities are built upon.
+This capability defines the plugin's shell and its sidebar panel: loading, the panel's ribbon and command-palette entries, the setup screen until the vault is ready, and the ready screen with the connected account, the project's updates, the open note's row, and the groups Changes, New, Waiting on reviewers and From the project. It decides what is drawn and when states are refreshed, and keeps write actions one at a time with visible busy states.
 
 ## Requirements
-
 ### Requirement: Plugin loads without error
 The plugin SHALL load successfully when enabled in Obsidian, registering
 its sidebar view type without throwing an error or preventing other
@@ -48,174 +47,174 @@ how many times it is triggered.
 - **WHEN** the view is closed and the user triggers either entry point twice in immediate succession, faster than the first open completes
 - **THEN** exactly one panel exists afterwards
 
-### Requirement: The sidebar view shows the current connection state
-The plugin's sidebar view SHALL render the plugin's current connection state
-whenever it is open, and SHALL update itself when that state changes without
-the author reopening it. It SHALL distinguish five situations: no check has
-been run, a check is in progress, a check succeeded and the author can create
-documents, a check succeeded and the author can only read, and the author
-cannot work. The view SHALL always show enough for the author to know what to
-do next, and SHALL NOT render an empty container or fixed text that is the
-same whether or not the plugin is connected.
+### Requirement: The sidebar view shows setup progress, then the ready screen
+The plugin's sidebar view SHALL render the plugin's current setup progress
+whenever it is open, and SHALL update itself when that progress changes without
+the author reopening it. While any of the five setup steps is incomplete, the
+view SHALL show only the first incomplete step, headed "Set up Docs Publisher"
+with "Step <n> of 5", the step's heading and text, and the step's controls. When
+all five are complete it SHALL show the ready screen. The view SHALL always show
+enough for the author to know what to do next, and SHALL NOT render an empty
+container.
 
-#### Scenario: Opening the view before any connection has been checked
-- **WHEN** the author opens the sidebar view in a session where no connection check has succeeded
-- **THEN** the view shows "Not connected yet", the message "Add your GitLab details to start publishing documents.", a control labelled "Open settings", and the note "You paste your access token once each time you start Obsidian."
+The steps and what each shows:
 
-#### Scenario: A check is running
-- **WHEN** a connection check is in progress while the sidebar view is open
-- **THEN** the view shows "Checking…"
+1. Git installed. Heading "Git isn't installed on this computer." Text "Docs Publisher needs Git to send and get documents. Install it, then check again." Controls "Get Git" and "Check again".
+2. Project address. Heading "Add your project's address." Text "Paste the SSH address from GitLab's Clone button." Control "Open settings".
+3. Key. With no key: heading "Connect this computer to GitLab.", text "A key lets GitLab recognise this computer. It stays on this computer.", control "Create key". With a key not yet tested: heading "Connect this computer to GitLab.", text "Add your key to GitLab, then test it.", controls "Copy key", "Open GitLab" and "Test". With a key that passed the test but no username known: heading "Connect this computer to GitLab.", text "Type your GitLab username so new documents can name you as their owner.", control "Open settings".
+4. Vault connected. Heading "Connect this vault to the project." Text "Docs Publisher will download the project's documents. Your own notes are never replaced without asking." Control "Connect this vault".
+5. Name and email. Heading "Tell us who you are." Text "Your name and email appear on the documents you send." Control "Open settings". This step does not show for an author whose machine-wide settings already hold a name and email.
 
-#### Scenario: Connected with access to create documents
-- **WHEN** a connection check has succeeded and the author's role on the configured project is Developer, Maintainer, or Owner
-- **THEN** the view names the person connected as, names their role as "<role> access", shows "Ready to publish your documentation.", and offers a control labelled "New Document"
+The ready screen SHALL name the person connected as ("Connected as <username>"
+when the username is known), show "Ready to publish your documentation.", and
+offer "New Document".
 
-#### Scenario: Connected with read-only access
-- **WHEN** a connection check has succeeded and the author's role on the configured project is Planner or Reporter
-- **THEN** the view names the person connected as, names their role as "<role> access", shows "Your <role> access lets you read this project's documents but not add to them. Ask your admin for Developer access.", offers a control labelled "Open settings", and does not offer "New Document"
+#### Scenario: Opening the view on a fresh machine
+- **WHEN** the author opens the sidebar view with git installed and nothing else set up
+- **THEN** the view shows "Set up Docs Publisher", "Step 2 of 5", "Add your project's address." and a control labelled "Open settings", and no document controls
 
-#### Scenario: The view updates without being reopened
-- **WHEN** the sidebar view is open and the retained connection result changes for any reason
-- **THEN** the view reflects the new state without the author closing and reopening it
+#### Scenario: Each step shows only itself
+- **WHEN** steps 1 and 2 are complete and step 3 is not
+- **THEN** only step 3's heading, text and controls are shown
 
-#### Scenario: The view is closed while a check is running
-- **WHEN** the author closes the sidebar view while a connection check is in progress and the check then finishes
+#### Scenario: The identity step is the last
+- **WHEN** steps 1 to 4 are complete and no name or email exists in any scope
+- **THEN** the view shows "Step 5 of 5", "Tell us who you are." and a control labelled "Open settings"
+
+#### Scenario: Git is missing
+- **WHEN** git cannot be found
+- **THEN** the view shows "Git isn't installed on this computer." with "Get Git" and "Check again"
+
+#### Scenario: A step is completed elsewhere
+- **WHEN** the sidebar view is open and the author completes a step in the settings tab
+- **THEN** the view moves to the next incomplete step without being reopened
+
+#### Scenario: Setup is complete
+- **WHEN** all five steps are complete
+- **THEN** the view shows "Ready to publish your documentation." and offers "New Document"
+
+#### Scenario: The view is closed while a setup action is running
+- **WHEN** the author closes the sidebar view while the key test is running and it then finishes
 - **THEN** no error occurs, and opening the view again shows the finished outcome
 
 ### Requirement: The sidebar view explains what blocks the author and offers a way on
-When the author cannot work, the sidebar view SHALL say why in a sentence
-naming what to do next, and SHALL offer a control labelled "Open settings".
-It SHALL distinguish a role that grants no access from a role that grants
-reading only, and both from a failure to connect, because the author's next
-action differs in each. Where the person connected as is known, the view
-SHALL still name them, so the author can see that their details were accepted
-and their role is the obstacle.
+When a setup action fails or a later action reports a setup-type failure, the
+sidebar view SHALL say why with the message for that failure (platform-config,
+"Setup problems are reported with a message that names what to do next"), in a
+sentence naming what to do next, and SHALL show the controls of the step it
+belongs to. A step that needs typing SHALL offer a control labelled "Open
+settings". It SHALL NOT show a status, an exit code or raw output.
 
-#### Scenario: The role grants no access to the project's documents
-- **WHEN** a connection check has succeeded but the author's role on the configured project grants them no access to its documents
-- **THEN** the view names the person connected as, names their role, and shows "Your GitLab account does not have access to this project's documents. Ask your admin for access." with a control labelled "Open settings"
-
-#### Scenario: The project could not be reached
-- **WHEN** a connection check identified the author but could not reach the configured project
-- **THEN** the view names the person connected as and shows "That project could not be found, or your access does not include it. Check your details in settings." with a control labelled "Open settings"
-
-#### Scenario: The access token was rejected
-- **WHEN** a connection check failed because the server rejected the token
-- **THEN** the view shows "Your access has expired or is incorrect. Ask your admin to set it up again." with a control labelled "Open settings", and names nobody
+#### Scenario: The key was rejected
+- **WHEN** the key test fails because GitLab does not recognise the key
+- **THEN** the view shows "GitLab doesn't recognise this key yet. Add it on GitLab's SSH keys page, then test again." with "Copy key", "Open GitLab" and "Test"
 
 #### Scenario: The server could not be reached
-- **WHEN** a connection check failed because the address was wrong or the network was unavailable
-- **THEN** the view shows "Could not reach GitLab at that address. Check the address and your connection, then try again." with a control labelled "Open settings"
+- **WHEN** a setup action fails because the address is wrong or the network is unavailable
+- **THEN** the view shows "Could not reach GitLab at that address. Check the address and your connection, then try again." with the step's controls
 
-#### Scenario: The check failed for any other reason
-- **WHEN** a connection check failed for any reason other than those above
-- **THEN** the view shows "The connection check did not succeed. Check your details in settings and try again." with a control labelled "Open settings", and displays no status code or raw error text
+#### Scenario: The project could not be reached
+- **WHEN** the key works but the project cannot be read
+- **THEN** the view shows "That project could not be found, or your access does not include it. Check the address in settings." with a control labelled "Open settings", and returns to the project address step
 
 #### Scenario: Selecting the control from a blocked state
 - **WHEN** the author selects "Open settings" from any state in which the view offers it
 - **THEN** the plugin's settings tab is opened, or the author is told how to reach it by hand
 
 ### Requirement: The panel offers document creation only where it can succeed
-The sidebar view SHALL offer the "New Document" control only in the state where
-creating a document would succeed, and SHALL NOT show it disabled, greyed, or
-otherwise present in any other state. Selecting it SHALL create a document
-through the same path as the command palette entry.
+The sidebar view SHALL offer the "New Document" control only when setup is
+complete, and SHALL NOT show it disabled, greyed, or otherwise present in any
+other state. Selecting it SHALL create a document through the same path as the
+command palette entry.
 
-#### Scenario: The control is absent before a check has run
-- **WHEN** the author opens the sidebar view in a session where no connection check has succeeded
+#### Scenario: The control is absent during setup
+- **WHEN** the author opens the sidebar view while any setup step is incomplete
 - **THEN** no "New Document" control appears anywhere in the view
 
-#### Scenario: The control appears when the author gains access
-- **WHEN** the sidebar view is open showing a read-only or blocked state, and a later connection check succeeds with Developer access or above
+#### Scenario: The control appears when setup completes
+- **WHEN** the sidebar view is open showing a setup step and the author completes the last step
 - **THEN** the "New Document" control appears without the author reopening the view
 
-#### Scenario: The control disappears when a connection detail is edited
-- **WHEN** the sidebar view is open offering "New Document" and the author edits any connection detail in the settings tab
-- **THEN** the view returns to its not-connected state and the "New Document" control is no longer offered
+#### Scenario: The control disappears when a step becomes incomplete
+- **WHEN** the sidebar view is open offering "New Document" and a later action reports that the key is no longer accepted
+- **THEN** the view returns to the key step and the "New Document" control is no longer offered
 
 ### Requirement: The panel lists the author's documents with their current state
-The sidebar view SHALL list every note in the vault whose front matter
-carries a `doc_id` and that has a next action, showing each one's name and
-its current state's author-facing label. A document has a next action when
-the author or a reviewer is expected to act on it. A document that is
-published, and whose note has not been edited since the plugin last wrote it,
-has none, and SHALL NOT be listed: a list of settled documents is reference
-rather than work, and the panel deliberately does not carry one. Notes
-carrying no `doc_id` SHALL NOT appear in any list.
+The sidebar view SHALL list every note in the vault that is a document, showing each
+one's name and its current state's author-facing label. A note is a document when git
+establishes it: its path is on the project, a send from this vault touched its path,
+or its exact bytes match a version the project or this vault holds at another path
+(a move). A `doc_id` in a note's front matter, where one exists, SHALL be read as an
+alias for the same identity and SHALL NOT be required.
 
-A document's state label SHALL be shown whenever that document has a resolved
-state. No marker a row also carries SHALL be displayed in place of that
-label. Markers describing the note — that it has been edited since it was
-last sent, for instance — SHALL be shown alongside the state, not instead of
-it: the state is where the document stands with its reviewers and the marker
-is what is true of the local note, and an author acting on one needs the
-other.
+A document has a next action when the author or a reviewer is expected to act on it.
+A document that is published, and whose note has not been edited since it was last
+sent, has none, and SHALL NOT be listed: a list of settled documents is reference
+rather than work. A note that is not on the project is covered by "The panel lists notes that
+have not been sent".
+
+A document's state label SHALL be shown whenever that document has a derived state. No
+marker a row also carries SHALL be displayed in place of that label. Markers describing
+the note, that it has been edited since it was last sent or that it has been moved,
+SHALL be shown alongside the state, not instead of it.
 
 #### Scenario: Documents are listed with their states
-- **WHEN** the author opens the sidebar view in a vault holding one note that carries `doc_id` but was never submitted, one document awaiting review, one with changes requested, one not accepted and one published, none of them edited since they were last sent
-- **THEN** the first four are listed, each showing its own state's label, and the published one is not listed
+- **WHEN** the author opens the sidebar view in a vault holding one document waiting for review, one not accepted and one published, none of them edited since they were last sent
+- **THEN** the first two are listed, each showing its own state's label, and the published one is not listed
 
 #### Scenario: A published document that has been edited
 - **WHEN** a published document's note has been edited since it was last sent
 - **THEN** it is listed, showing the "Published" label and the edited marker
 
-#### Scenario: Notes that have never been submitted are not listed
-- **WHEN** the author opens the sidebar view in a vault holding many notes, only some of which carry `doc_id`
-- **THEN** only notes carrying `doc_id` appear
+#### Scenario: A document with no identity property
+- **WHEN** a note sits at a path the project holds and its front matter carries no `doc_id`
+- **THEN** it is recognised as that document, and is listed if it has a next action
 
-#### Scenario: The list is empty before anything has been submitted
-- **WHEN** the author opens the sidebar view in a vault where no note carries `doc_id`
-- **THEN** the "Needs you" section reads "Nothing submitted yet. Documents you submit will be listed here.", rather than showing an error, and the view's existing controls are unaffected
+#### Scenario: A moved note
+- **WHEN** the author moves a published note to another folder without changing it
+- **THEN** it is listed once, at its new path, showing the "Published" label and the moved marker, and the old path is not listed
 
 #### Scenario: A document that is both under review and locally edited
-- **WHEN** a document whose state is changes-requested has been edited since it was last sent
-- **THEN** its row shows the changes-requested label AND the edited marker, so the author can see both where the review stands and that local work has not reached it
+- **WHEN** a document waiting for review has been edited since it was last sent
+- **THEN** its row shows "Waiting for review" AND the edited marker
 
-#### Scenario: An edited document whose state is unresolved
-- **WHEN** a document has been edited since it was last sent and no refresh has resolved its state
-- **THEN** its row shows the edited marker and no state label, since no state has been established to show
+#### Scenario: A document whose state has not been derived
+- **WHEN** a document has been edited and no fetch has completed
+- **THEN** its row shows the edited marker and no state label
 
 ### Requirement: The panel separates documents by who acts next
-The sidebar view SHALL present listed documents in two sections, each named
-for who acts next, and every listed document SHALL be in exactly one of them:
+The sidebar view SHALL present listed documents in two sections, each named for
+who acts next, and every listed document SHALL be in exactly one of them:
 
-- **"Needs you"** SHALL hold every document waiting on the author: never
-  submitted, changes requested, not accepted, any document edited since it was
-  last sent, and any document whose state has not been resolved.
-- **"Waiting on reviewers"** SHALL hold every document waiting for review
-  whose note has not been edited since it was last sent.
+- **"Needs you"** SHALL hold every document waiting on the author: not accepted, any document edited since it was last sent, and any document whose state has not been derived.
+- **"Waiting on reviewers"** SHALL hold every document waiting for review whose note has not been edited since it was last sent.
 
-A document whose state has not been resolved SHALL NOT be placed in "Waiting
-on reviewers", since that would assert a review nothing has established.
+A document whose state has not been derived SHALL NOT be placed in "Waiting on
+reviewers", since that would assert a review nothing has established.
 
 "Needs you" SHALL come first and hold the Refresh control. "Waiting on
 reviewers" SHALL be collapsible, SHALL be collapsed when the view opens, and
-SHALL be present whether or not it holds anything. Its heading SHALL report
-its count while collapsed, or that the last check failed, so that collapsing
-it hides the list and never the count.
+SHALL be present whether or not it holds anything. Its heading SHALL report its
+count while collapsed, or that the last check failed, so that collapsing it hides
+the list and never the count.
 
-Each section SHALL carry a one-line description of what it holds, shown
-whether or not it has rows. "Needs you" SHALL read "Documents waiting on you:
-not sent yet, sent back by a reviewer, or changed since you last sent them."
-"Waiting on reviewers", when expanded, SHALL read "Sent and unchanged. Nothing
-to do until a reviewer responds." A heading names the rule only to someone
-who already knows it.
+Each section SHALL carry a one-line description of what it holds, shown whether
+or not it has rows. "Needs you" SHALL read "Documents waiting on you: not
+accepted, or changed since you last sent them." "Waiting on reviewers",
+when expanded, SHALL read "Sent and unchanged. Nothing to do until a reviewer
+responds."
 
 When "Needs you" holds nothing but some note carries `doc_id`, it SHALL read
-"Nothing needs you right now." When "Waiting on reviewers" is expanded and
-holds nothing, it SHALL read "Nothing is waiting for review right now."
+"Nothing needs you right now." When "Waiting on reviewers" is expanded and holds
+nothing, it SHALL read "Nothing is waiting for review right now."
 
 #### Scenario: A vault holding documents in several states
-- **WHEN** the author opens the sidebar view in a vault holding one document awaiting review, one with changes requested, one published, and one not accepted, none of them edited since they were last sent
-- **THEN** the changes-requested and not-accepted ones are in "Needs you", the awaiting-review one is in "Waiting on reviewers", and the published one is in neither
-
-#### Scenario: A never-submitted note stays where it was
-- **WHEN** the author opens the sidebar view in a vault holding a note that carries `doc_id` but resolves as never submitted
-- **THEN** it appears in "Needs you"
+- **WHEN** the author opens the sidebar view in a vault holding one document waiting for review, one not accepted and one published, none of them edited since they were last sent
+- **THEN** the not-accepted one is in "Needs you", the waiting one is in "Waiting on reviewers", and the published one is in neither
 
 #### Scenario: A submitted document moves rather than disappears
 - **WHEN** the author submits a document and does not edit it afterwards
-- **THEN** it is no longer in "Needs you", it is in "Waiting on reviewers", and that section's heading count has gone up by one
+- **THEN** it is no longer in "Needs you", it is in "Waiting on reviewers", and that section's heading count has gone up by one, without a fetch
 
 #### Scenario: Editing a document under review
 - **WHEN** the author edits a document that is in "Waiting on reviewers"
@@ -225,286 +224,325 @@ holds nothing, it SHALL read "Nothing is waiting for review right now."
 - **WHEN** the author sends an update for a document that is waiting for review and has been edited
 - **THEN** it moves back to "Waiting on reviewers"
 
-#### Scenario: A reviewer requests changes
-- **WHEN** a document in "Waiting on reviewers" is refreshed and resolves as changes requested
-- **THEN** it moves to "Needs you", showing "Changes requested"
-
-#### Scenario: A document whose state has not been resolved yet
-- **WHEN** a tracked document's state has not been resolved, because no refresh has succeeded and nothing is stored for it
+#### Scenario: A document whose state has not been derived yet
+- **WHEN** a tracked document's state has not been derived because no fetch has completed
 - **THEN** it appears in "Needs you", and not in "Waiting on reviewers"
 
 #### Scenario: The section opens collapsed
 - **WHEN** the author opens the sidebar view while two documents are waiting for review and untouched
 - **THEN** "Waiting on reviewers" shows its heading and a count of 2, and no rows until the author expands it
 
-#### Scenario: Expanded, the section shows full rows
-- **WHEN** the author expands "Waiting on reviewers"
-- **THEN** each document in it is shown with its name, its state's label and its way to open it on the platform, as in "Needs you"
-
-#### Scenario: Nothing needs the author, but something is under review
-- **WHEN** every tracked document is either waiting for review and untouched, or published and untouched
-- **THEN** "Needs you" reads "Nothing needs you right now."
-
-#### Scenario: Nothing is under review
-- **WHEN** no document is waiting for review untouched and the author expands "Waiting on reviewers"
-- **THEN** it reads "Nothing is waiting for review right now.", and its collapsed heading shows a count of 0
-
-#### Scenario: Each section says what it holds
-- **WHEN** the author opens the sidebar view and expands "Waiting on reviewers", before any refresh has run
-- **THEN** "Needs you" shows its description and "Waiting on reviewers" shows its own, whatever rows either section has
-
 #### Scenario: A refresh fails
 - **WHEN** the last refresh failed and "Waiting on reviewers" is collapsed
 - **THEN** its heading reports that the check failed, rather than a count that might be stale
 
 ### Requirement: The panel offers Reset for a document with an open review cycle
-The sidebar view SHALL offer a Reset action for the currently open note
-when that note's resolved state is pending or changes-requested, alongside
-the resubmit action already offered for it. It SHALL NOT offer Reset for a
-document in any other state, and SHALL NOT offer it as a per-row control in
-either document list.
+The sidebar view SHALL offer a Reset action for the currently open note when
+that note's derived state is pending, alongside the resubmit action already
+offered for it. It SHALL NOT offer Reset for a document in any other state, and
+SHALL NOT offer it as a per-row control in either document list.
+
+Because a successful send records the branch in the fetched copy, Reset SHALL be
+offered as soon as a send that opened or advanced a review succeeds, with no
+fetch in between.
 
 #### Scenario: The open note is awaiting review
-- **WHEN** the author has open a note whose resolved state is pending or changes-requested
+- **WHEN** the author has open a note whose derived state is pending
 - **THEN** the view offers a Reset action for it alongside the resubmit action
 
 #### Scenario: The open note is published or not accepted
-- **WHEN** the author has open a note whose resolved state is published or not accepted
+- **WHEN** the author has open a note whose derived state is published or closed
 - **THEN** no Reset action is offered
 
 #### Scenario: Reset is never a row control
 - **WHEN** either document list is rendered
 - **THEN** no row carries a Reset control, whatever that document's state
 
+#### Scenario: Straight after a send
+- **WHEN** the author submits the open note and the notice "Waiting for review" appears
+- **THEN** without a fetch, the view shows "Waiting for review" for it, the resubmit action reads "Send update", and Reset is offered beside it
+
+#### Scenario: The review ended between the send and Reset
+- **WHEN** the author presses Reset on a note derived as pending, and a fetch since has shown its review published and its branch removed
+- **THEN** nothing is written to the note and the author is shown "This document's review has already finished, so nothing was reset. Get updates to see where it stands now."
+
 ### Requirement: States are refreshed on opening the panel and on request, never on editing
-The sidebar view SHALL refresh states from the remote when the view is
-opened and when the author selects a refresh control, and SHALL NOT make any
-remote request in response to the note being changed, the active note
-changing, or the note's metadata changing.
+The sidebar view SHALL fetch from the remote when the view is opened and when
+the author selects a refresh control, and SHALL NOT start a process or make any
+remote request in response to the note being changed, the active note changing,
+or the note's metadata changing.
 
 This is normative rather than incidental: the view already re-renders on all
-three of those events, so rendering and refreshing must stay separate or
-every keystroke touching front matter becomes a request.
+three of those events, so rendering and refreshing must stay separate or every
+keystroke touching front matter becomes a process.
 
 #### Scenario: Opening the panel refreshes
-- **WHEN** the author opens the sidebar view
-- **THEN** states are refreshed from the remote once
+- **WHEN** the author opens the sidebar view and setup is complete
+- **THEN** one fetch is made and states and the updates count are derived from it
 
 #### Scenario: The author refreshes on request
 - **WHEN** the author selects the refresh control
-- **THEN** states are refreshed from the remote and the list redraws with the result
+- **THEN** a fetch is made and the list redraws with the result
 
 #### Scenario: Editing a note does not refresh
 - **WHEN** the author types in a note, switches to a different note, or edits a note's front matter while the sidebar view is open
-- **THEN** the view redraws from the states it already has, and no remote request is made
+- **THEN** the view redraws from the states it already has, and no process is started and no remote request is made
 
-### Requirement: The panel lists documents available to import
-The sidebar view SHALL present a third section listing documents the remote
-holds that this vault has no note for, each identified by its remote path.
-
-The section SHALL be present whether or not it has anything to list, and when
-it has nothing SHALL say WHICH of the three empty cases it is in: nothing to
-import, not yet checked, or the check did not succeed. An absent section says
-all three at once, and only the first of them means the author has nothing to
-do.
-
-#### Scenario: Documents exist only on the remote
-- **WHEN** the author opens the panel in a vault missing three documents the remote holds
-- **THEN** a section lists those three, each showing its remote path
-
-#### Scenario: The vault already has everything
-- **WHEN** every document on the remote already has a note in the vault
-- **THEN** the section is still shown, saying there is nothing to import
-
-#### Scenario: Nothing has been checked yet
-- **WHEN** the panel is showing before any check of the remote has answered
-- **THEN** the section says so, rather than saying there is nothing to import
-
-#### Scenario: The author collapses the section
-- **WHEN** the author collapses the section
-- **THEN** its contents are hidden and its heading still reports how many documents it holds, or that its last check failed, so collapsing cannot hide which of the empty cases applies
-
-#### Scenario: The list could not be built
-- **WHEN** the remote could not be asked which documents are available, and nothing was resolved on an earlier attempt
-- **THEN** the section appears carrying that failure, naming the missing permission where the platform reported one, rather than being absent as though the vault already had everything
-
-The two are different answers and SHALL NOT look alike. "There is nothing to
-import" and "the question could not be asked" differ by whether the author
-needs to do something, and this section's own failure is not covered by any
-other section's: the documents list and this one read different resources,
-which a fine-grained credential can grant separately.
-
-#### Scenario: The listing was incomplete
-- **WHEN** the remote listing the section is built from was truncated
-- **THEN** the author is told the list is incomplete, rather than being shown a partial list presented as everything available
-
-### Requirement: The panel offers import per document and for all of them
-The sidebar view SHALL offer an action to import one listed document, and an
-action to import every listed document. Each SHALL report its outcome per
-document, including which imports were refused and why.
-
-#### Scenario: Importing one document
-- **WHEN** the author selects the import action on one listed document
-- **THEN** only that document is imported, and it leaves the list
-
-#### Scenario: Importing everything
-- **WHEN** the author selects the import-all action
-- **THEN** every listed document is imported, and the author is told the outcome for each
-
-#### Scenario: One import in a batch is refused
-- **WHEN** the author imports all documents and one of them collides with a note the vault already has
-- **THEN** the others are still imported and the refused one is reported with its reason, rather than the batch stopping at the first refusal
-
-### Requirement: Discovery reaches the remote only when asked
-The sidebar view SHALL NOT read the remote to build this section while
-rendering. It SHALL populate it on the same explicit triggers the panel's
-other remote-backed lists already use, and SHALL render from what was last
-resolved.
-
-#### Scenario: Rendering does not reach the remote
-- **WHEN** the panel re-renders because the author switched notes or edited front matter
-- **THEN** no request is made to list the remote's files
-
-#### Scenario: Refreshing populates the section
-- **WHEN** the author triggers the panel's refresh
-- **THEN** the discoverable documents are resolved from the remote along with the panel's other remote-backed state
+#### Scenario: The edited marker costs no process
+- **WHEN** the author edits a note and the view redraws its row
+- **THEN** the edited marker is decided by comparing the note's content identifier with the listing already read, and no process is started
 
 ### Requirement: A refresh that fails keeps the last known states and says so
 When a refresh does not succeed, the sidebar view SHALL continue showing the
-states it last resolved, SHALL say that the refresh did not succeed, and
-SHALL NOT present the states shown as freshly confirmed. It SHALL NOT clear
-the list.
+states it last derived, SHALL say that the refresh did not succeed, and SHALL
+NOT present the states shown as freshly confirmed. It SHALL NOT clear the list.
 
 #### Scenario: A refresh fails while states are already on screen
-- **WHEN** a refresh fails and the view is already showing resolved states
+- **WHEN** a refresh fails and the view is already showing derived states
 - **THEN** those states remain on screen and the author is told "Could not check your documents' status just now. They may have changed since this was last updated."
 
-#### Scenario: A refresh is refused for a missing permission
-- **WHEN** a refresh is refused because the access token lacks the permission needed to read the project's review queue, and the platform names that permission
-- **THEN** the author is told "Your access token doesn't have permission to check your documents' status (missing: Merge Request: Read). Ask your admin to add it."
+#### Scenario: The key is no longer accepted
+- **WHEN** a refresh fails because GitLab no longer recognises the key
+- **THEN** the view returns to the key step with "GitLab doesn't recognise this key yet. Add it on GitLab's SSH keys page, then test again."
 
 #### Scenario: The very first refresh fails with nothing to fall back on
-- **WHEN** a refresh fails and the view has never resolved any state
+- **WHEN** a refresh fails and the view has never derived any state
 - **THEN** the author is told the refresh did not succeed and no document is shown with a state that was never established
 
 ### Requirement: Each listed document offers a way to open it on the platform
 The sidebar view SHALL offer, for each listed document that has been
-submitted, a link that opens that document's review on the platform in the
-author's browser.
+submitted, a link labelled "Open in GitLab" that opens, in the author's
+browser, the project's review list filtered to that document's branch when the
+document is waiting for review, or the document's file page on the default
+branch when it is published. The link SHALL be derived from the project address
+and SHALL cost no request.
 
-#### Scenario: Opening a document's review
-- **WHEN** the author selects the link beside a listed document that has been submitted
-- **THEN** that document's review opens on the platform in the author's browser
+#### Scenario: A document waiting for review
+- **WHEN** the author selects the link beside a document waiting for review
+- **THEN** the project's review list filtered to that document's branch opens in the browser
+
+#### Scenario: A published document
+- **WHEN** the author selects the link beside a published document that is listed because it was edited
+- **THEN** the document's file page on the default branch opens
 
 #### Scenario: A document with nothing to open
-- **WHEN** a listed document resolved as never submitted
+- **WHEN** a listed document's remote path and review cannot be found, so it is closed
 - **THEN** no such link is offered for it
 
-### Requirement: The panel lists documents whose tracking record has no note
-The sidebar view SHALL list every persisted tracking record whose `doc_id`
-matches no note currently in the vault, separately from the list of
-documents built from the vault. For each, it SHALL offer a way to recover
-the document when its content can be located, and SHALL otherwise state
-plainly that automatic recovery is not available and offer the existing way
-to open it on the platform instead.
-
-This section SHALL be present whether or not it has anything to list, and
-when it has nothing SHALL say which of the three empty cases it is in:
-nothing to recover, not yet checked, or the check did not succeed. It SHALL
-be collapsible, and a collapsed heading SHALL still report its count or that
-its last check failed — collapsing hides a list, never which case applies. It
-previously disappeared when empty, on the reasoning that an empty-state
-message would compete with the main list; that made three different answers
-look identical, and only one of them means the author has nothing to do.
-
-Where recovery is unavailable for several records at once, the explanation
-SHALL be given once for the section rather than repeated on every row.
-
-#### Scenario: A recoverable orphaned record is listed
-- **WHEN** the vault holds no note for a persisted record, and that document's content can be located
-- **THEN** the record is listed with a way to recover it
-
-#### Scenario: A non-recoverable orphaned record is listed with an explanation
-- **WHEN** the vault holds no note for a persisted record, and that document's content cannot be located
-- **THEN** the record is listed stating recovery is not available, with a way to open it on the platform instead
-
-#### Scenario: Nothing to recover
-- **WHEN** every persisted record matches a note in the vault
-- **THEN** this list is still shown, saying there is nothing to recover
-
-#### Scenario: The check did not succeed
-- **WHEN** resolving which records can be recovered failed, and nothing was resolved on an earlier attempt
-- **THEN** the section is shown carrying that failure, naming the missing permission where the platform reported one
-
-### Requirement: Recovery fetches content only when the author asks for it
-Listing which orphaned records exist SHALL make no remote request. A remote
-request to read a document's content SHALL be made only when the author
-selects that document's recovery action.
-
-#### Scenario: Listing orphaned records makes no request
-- **WHEN** the panel renders the list of documents with no matching note
-- **THEN** no request is made to determine which are listed
-
-#### Scenario: Recovering one document requests only that document's content
-- **WHEN** the author selects the recovery action for one listed document
-- **THEN** a request is made for that document's content, and no request is made for any other listed document
-
 ### Requirement: A tracked document offers a resubmit action in every state
-The sidebar view SHALL offer an action for the currently open document
-whenever it is already tracked, matching that document's RESOLVED state,
-rather than showing only its state label. Selecting the action SHALL
-resubmit through the same path as the command palette's "Submit for
-review" command.
+The sidebar view SHALL offer an action for the currently open document whenever
+it is already tracked, matching that document's DERIVED state, rather than
+showing only its state label. Selecting the action SHALL resubmit through the
+same path as the command palette's "Submit for review" command.
 
-The action and the label SHALL be derived from the same answer. The view
-SHALL NOT take its label from a stored record while taking its eligibility
-from somewhere else: a record describes where a document stood on the project
-it was written against, and offering an action from it while the resolved
-state says otherwise acts on a claim the remote has not made.
+The action and the label SHALL be derived from the same answer.
 
-No action SHALL be offered for a document whose record belongs to a project
-other than the configured one, or whose project is not known. Such a document
-has no resolved state, and an action built from its record would carry a branch
-and a merge request belonging to a different project.
-
-A document whose record names a DIFFERENT project, and for which the configured
-project holds no review, SHALL be marked as being in another project. Without
-the marker it reads exactly like work owed on this project, and its only offered
-action submits into the configured one. A record whose project is not known
-SHALL NOT be marked: that would assert the one thing not established.
-
-#### Scenario: A pending document offers to push an update
-- **WHEN** the currently open document's resolved state is pending
-- **THEN** the view shows the state label and an action that pushes an update when selected
-
-#### Scenario: A changes-requested document offers to push an update
-- **WHEN** the currently open document's resolved state is changes-requested
-- **THEN** the view shows the state label and an action that pushes an update when selected
+#### Scenario: A pending document offers to send an update
+- **WHEN** the currently open document's derived state is pending
+- **THEN** the view shows the state label and an action that sends an update when selected
 
 #### Scenario: A published document offers to open a new review cycle
-- **WHEN** the currently open document's resolved state is published
+- **WHEN** the currently open document's derived state is published
 - **THEN** the view shows the state label and an action that starts a new review cycle when selected
 
 #### Scenario: A not-accepted document offers to open a new review cycle
-- **WHEN** the currently open document's resolved state is not accepted
+- **WHEN** the currently open document's derived state is closed
 - **THEN** the view shows the state label and an action that starts a new review cycle when selected
 
 #### Scenario: The command palette and the panel action agree
 - **WHEN** the author resubmits the same document once through the panel's action and once through the command palette, in separate sessions with identical starting state
 - **THEN** both produce the same outcome
 
-#### Scenario: The open document's record belongs to another project
-- **WHEN** the currently open document's record carries a project other than the configured one, and the configured project holds no review for it
-- **THEN** no resubmit action is offered for it and no state label is shown, and it is marked as being in another project, so an author who configured the wrong project by mistake is warned before submitting into it
+### Requirement: The panel's write actions show when they are working and run one at a time
+The plugin SHALL run at most one of its six actions that change the vault or
+the remote or that wait on them — Submit (the sequence started by confirming
+the submit dialog, under any of its labels), Reset, Get updates, Connect this
+vault, Test, and Create key — at a time.
 
-#### Scenario: A record whose project is not known is not marked
-- **WHEN** a document's record carries no project, and the configured project holds no review for it
-- **THEN** no state label and no marker are shown, since nothing established where it belongs and saying "another project" would assert it
+While one is running, the sidebar view SHALL show the control that started it
+with a busy label and SHALL NOT let it be pressed:
 
-#### Scenario: The plugin is pointed at a different project
-- **WHEN** the connection details are changed to a different project, and the documents in the vault were submitted to the previous one
-- **THEN** none of them is shown a state or offered an action, rather than continuing to show the states they held on the previous project
+- Submit: "Sending…", from the moment the author confirms the submit dialog until the outcome is reported. Opening the dialog alone does not start it.
+- Reset: "Checking…", from the press until the author has answered the confirmation, or the reset has been refused before one was shown.
+- Get updates: "Getting updates…", until the outcome is reported, including while the author answers the summary or a choice.
+- Connect this vault: "Connecting…".
+- Test: "Testing…".
+- Create key: "Creating…".
 
-#### Scenario: Submitting into the new project is still offered
-- **WHEN** the author opens a document whose record belongs to a different project, and that document has never been submitted to the configured one
-- **THEN** the view offers a first submission, since submitting into the configured project is a thing the author can still do
+The busy label SHALL appear only on the control for the action running. Every
+other action control SHALL stay visible with its normal label and SHALL NOT be
+pressable until the action ends.
+
+An attempt to start any of the six while one is running — including from the
+command palette — SHALL start nothing and SHALL show the notice "Still finishing
+your last action. Try again in a moment."
+
+A refresh, and the fetch made when the panel opens, SHALL NOT run while one of the
+six is running. A refresh the author asked for SHALL show the same notice; the
+fetch made on opening SHALL simply be skipped, and the panel SHALL redraw from
+what it already has. This keeps the version an update compares against from
+changing under it.
+
+The action SHALL count as ended however it ends: success, a refusal, a failure
+notice, the author dismissing a dialog, or an unexpected error. The controls
+SHALL then return to their normal labels and be pressable again. Which action is
+running SHALL be held in memory only.
+
+#### Scenario: Reset shows it is working before its confirmation appears
+- **WHEN** the author presses Reset on the open note
+- **THEN** the control reads "Checking…" and cannot be pressed until the confirmation appears
+
+#### Scenario: Cancelling the Reset confirmation restores the control
+- **WHEN** the author dismisses the Reset confirmation without confirming
+- **THEN** nothing is written and the control reads "Reset" and can be pressed again
+
+#### Scenario: A double press on Reset asks once
+- **WHEN** the author presses Reset twice in quick succession
+- **THEN** exactly one confirmation is shown
+
+#### Scenario: Submit shows it is working after the dialog is confirmed
+- **WHEN** the author confirms the submit dialog
+- **THEN** the panel's submit control reads "Sending…" and cannot be pressed until the submission's outcome notice appears
+
+#### Scenario: Get updates shows it is working
+- **WHEN** the author presses Get updates
+- **THEN** the control reads "Getting updates…" and cannot be pressed until the outcome notice appears
+
+#### Scenario: Test shows it is working
+- **WHEN** the author presses Test
+- **THEN** the control reads "Testing…" and cannot be pressed until the result is shown
+
+#### Scenario: Other controls wait while one action runs
+- **WHEN** any of the six actions is running
+- **THEN** every other action control in the panel keeps its normal label and cannot be pressed
+
+#### Scenario: The busy label stays with its document
+- **WHEN** a submission of one note is running and the author opens a different note
+- **THEN** that note's submit control keeps its normal label and cannot be pressed, and no control claims to be sending it
+
+#### Scenario: Refreshing while an update runs
+- **WHEN** the author presses Refresh while Get updates is running
+- **THEN** no fetch starts and the notice "Still finishing your last action. Try again in a moment." is shown
+
+#### Scenario: Opening the panel while an update runs
+- **WHEN** the panel is opened while Get updates is running
+- **THEN** no fetch starts, no notice is shown, and the panel draws from what it already has
+
+#### Scenario: Starting a second action is refused with a message
+- **WHEN** the author runs "Submit for review" from the command palette while any of the six actions is running
+- **THEN** no dialog opens, nothing is sent, and the notice "Still finishing your last action. Try again in a moment." is shown
+
+#### Scenario: A failed action releases the controls
+- **WHEN** a running action ends with a failure notice or an unexpected error
+- **THEN** every action control returns to its normal label and can be pressed again
+
+#### Scenario: Busy state does not survive a reload
+- **WHEN** the plugin is reloaded
+- **THEN** no control starts out busy or unpressable
+
+### Requirement: The panel offers Get updates and says when updates are waiting
+When setup is complete, the sidebar view SHALL show a line saying whether
+updates are waiting, and a "Get updates" control. The line SHALL distinguish
+four cases: updates are waiting ("<n> updates available", or "1 update
+available"), there are none ("You have the latest documents."), nothing has been
+checked yet ("Not checked yet."), and the check did not succeed ("Could not
+check for updates. Try Refresh."). The count SHALL come from the fetch made when
+the view opened or when the author refreshed, and SHALL NOT start a fetch of its
+own while rendering. Selecting "Get updates" SHALL start the update described by
+vault-sync, through the same path as the command palette's "Get updates"
+command.
+
+#### Scenario: Updates are waiting
+- **WHEN** the author opens the panel and the project holds three changed files the vault has not received
+- **THEN** the view shows "3 updates available" and a "Get updates" control
+
+#### Scenario: Nothing is waiting
+- **WHEN** a fetch completed and the vault has everything
+- **THEN** the view shows "You have the latest documents."
+
+#### Scenario: Not checked yet
+- **WHEN** the view is shown before the first fetch has answered
+- **THEN** it shows "Not checked yet." and not "You have the latest documents."
+
+#### Scenario: The check failed
+- **WHEN** the last fetch failed
+- **THEN** it shows "Could not check for updates. Try Refresh." and not "You have the latest documents."
+
+#### Scenario: The command palette and the panel agree
+- **WHEN** the author gets updates once from the panel and once from the command palette
+- **THEN** both start the same update
+
+### Requirement: The panel lists notes that have not been sent
+The sidebar view SHALL show a collapsible section "Not sent yet" holding every markdown
+note that is not on the project and has no send from this vault, whatever its properties,
+the way git lists new files. It SHALL be collapsed when the view opens and its heading
+SHALL report its count while collapsed. Each row SHALL show the note's name and folder and
+a **Submit** control that opens the submit dialog for that note, which asks for a title and
+category when the note has none. Hidden folders (names starting with a dot) and the
+settings and repository folders SHALL never be listed or counted. Before anything has been
+derived the section SHALL list nothing and say so, since "not on the project" cannot yet
+be told.
+
+#### Scenario: Notes in a folder the author never sent from
+- **WHEN** the vault holds `L1/a.md` and `L2/b.md`, neither on the project, `b.md` with `title` and `category` and `a.md` without
+- **THEN** "Not sent yet" lists both, each with its folder and a Submit control, and its heading counts 2
+
+#### Scenario: Submitting from a row
+- **WHEN** the author presses Submit on a row
+- **THEN** the submit dialog opens for that note, exactly as for the open note, and once the send succeeds the row leaves "Not sent yet"
+
+#### Scenario: Nothing to list
+- **WHEN** every note is on the project or has been sent
+- **THEN** the section is present and reads "Every note is on the project."
+
+### Requirement: A moved note is shown as moved and is not restored by Get updates
+When a path the project holds is absent from the vault and a note elsewhere in the vault
+has exactly the bytes the project holds at that path, the panel SHALL show that note
+with the moved marker and SHALL NOT count the absent path as an update. Get updates SHALL
+NOT restore it. A move that was also edited has no exact match and SHALL be treated as a
+deletion plus a new note.
+
+#### Scenario: Pure move
+- **WHEN** the author moves a published note without editing it and presses Get updates
+- **THEN** no copy is restored at the old path and the panel shows no waiting update for it
+
+#### Scenario: Move and edit
+- **WHEN** the author moves a published note and edits it
+- **THEN** Get updates restores the original at the old path, and the edited note is listed under "Not sent yet" if it qualifies
+
+### Requirement: The ready screen is a toolbar and groups of single-purpose rows
+The ready screen SHALL show, top to bottom: who is connected (initials in an avatar, the
+name, and a "Connected" status with a green dot); a banner saying what the project has, in
+one of four conditions (latest, updates waiting, check failed, not checked yet); a New
+document button beside two icon buttons (Get updates, Refresh), each with a tooltip; a
+rule; the open note's row, always, whatever its status and whichever group lists it; then the groups **Changes**,
+**New**, **Waiting on reviewers** and **From the project**. Get updates SHALL be outlined,
+and never made the primary button, only while an update is waiting. Every group SHALL fold
+on a click of its title and show its count as a pill. **Changes** SHALL start open, hold the
+documents edited, moved or not accepted, and read "No changes to send." when empty. The
+notes never sent SHALL be the separate group **New**. **New**, **Waiting on reviewers** and
+**From the project** SHALL start folded. **From the project** SHALL name the files Get
+updates would act on (new, changed, removed, deleted here) by name, up to 50, then say how
+many more. Every row SHALL show its name and its buttons on one line, then its status with a
+coloured dot, then its folder; the full path SHALL be the tooltip of the name. Only the open
+note's row SHALL offer Reset.
+
+#### Scenario: Nothing waiting
+- **WHEN** the project has nothing the vault lacks
+- **THEN** Get updates is not outlined, the banner reads "You have the latest documents.", and "From the project" is present, folded, with a count of 0
+
+#### Scenario: A note the author deleted
+- **WHEN** the author deletes a note the project has unchanged
+- **THEN** "From the project" counts it and names it as "Deleted here", and Get updates is outlined
+
+#### Scenario: A very large first update
+- **WHEN** the project holds 400 files the vault lacks
+- **THEN** "From the project" names 50 and says "and 350 more"
+
+#### Scenario: The open note is always shown
+- **WHEN** the open note is published and unchanged, or waiting for review, or never sent
+- **THEN** a row for it is shown above the groups with its status and the send control, even when the group that lists it is folded
+
+#### Scenario: Folding a group does not move its rows
+- **WHEN** the open note is waiting for review and the author folds or opens "Waiting on reviewers"
+- **THEN** the row above the groups is unchanged, and the note's row inside the group is only marked as the current one

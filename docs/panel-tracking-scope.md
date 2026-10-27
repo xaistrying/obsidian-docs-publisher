@@ -1,5 +1,9 @@
 # Panel tracking scope: milestone 5b (reset) and milestone 9 (discover & import)
 
+> **SUPERSEDED 2026-10-22 by the change `replace-rest-with-local-git-ssh`.** "Get updates" replaces Import,
+> Discover and Recover: it brings the whole project down, one direction, and a document is listed because its
+> note carries a `doc_id`. Reset survives, rebuilt on git. Kept as the record of why those three existed.
+
 Background for two milestones that both reshape what the sidebar panel
 tracks and shows, and that directly reference the open questions
 `openspec/changes/add-document-recovery/future-work.md` already logged.

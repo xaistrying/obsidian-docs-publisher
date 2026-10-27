@@ -62,12 +62,12 @@ fi
 
 # Overwrite the runtime files in place and NEVER remove the folder.
 #
-# `data.json` lives INSIDE the plugin folder and is the only local record of
-# what this vault has submitted and imported — only submissions heal
-# themselves afterwards, by reconciling from each note's `doc_id`. IMPORTED
-# documents have no merge request to reconcile from, so losing it made every
-# imported document read as "Not submitted yet" again (observed 2026-09-22,
-# after a reinstall that wiped the folder).
+# `data.json` lives INSIDE the plugin folder. It holds the project address, the
+# path of the key, the username and what the last key test covered, and earlier
+# versions left other keys in it. None of it is irreplaceable, but an author who
+# has finished setup should not have to do it again because the plugin was
+# updated, and an earlier version can only be reinstalled if its keys are still
+# there. So only the three runtime files are copied, and nothing else is touched.
 log_info "Installing Docs Publisher plugin..."
 mkdir -p "$PLUGIN_PATH"
 cp manifest.json main.js styles.css "$PLUGIN_PATH/"
@@ -80,4 +80,4 @@ log_info "Next steps:"
 log_info "  1. Open Obsidian vault: $VAULT_PATH"
 log_info "  2. Go to Settings → Community Plugins"
 log_info "  3. Enable 'Docs Publisher' (if not already enabled)"
-log_info "  4. Click the git-branch icon in the left ribbon to open the plugin"
+log_info "  4. Click the git-branch icon in the left ribbon to open the plugin and follow the steps it shows"

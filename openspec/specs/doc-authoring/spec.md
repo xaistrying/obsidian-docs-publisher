@@ -2,15 +2,9 @@
 
 ## Purpose
 
-This capability defines how an author creates and submits a document from the
-plugin: where the note is placed, what front matter is written at creation
-and at submission, the access and connection checks that gate each action,
-and how a document's identity (`doc_id`) is derived and frozen at first
-submit. TBD: the fuller authoring lifecycle (editing, review) beyond creation
-and first submission.
+This capability defines how an author creates and submits a document: where a new note is placed and what front matter it carries, how a note is sent for review (a first submission, an update to a review in progress, a new version of a published document, a move), the checks that stop a send before anything is written, how a note is reset to the version under review, and how a document's identity is derived from its file name and kept unique across the project.
 
 ## Requirements
-
 ### Requirement: An author can create a document from the plugin
 The plugin SHALL offer a "New Document" action from two places — a control in
 the plugin's panel and an entry in the command palette — and both SHALL take
@@ -75,12 +69,17 @@ completed when the document is first submitted.
 - **THEN** the plugin leaves the new value alone and never restores what it originally wrote
 
 ### Requirement: The owner is the connected account's username
-The plugin SHALL write the username of the account the connection check
-identified, exactly as the platform reports it. It SHALL NOT derive the value
-from an email address, a display name, or any other field.
+The plugin SHALL write the username the last successful key test reported,
+exactly as the platform reports it, or the username the author typed when the
+test could not read one. It SHALL NOT derive the value from an email address, a
+display name, or any other field.
 
 #### Scenario: An account whose username differs from its email
-- **WHEN** the author creates a document while connected as an account with username `inguyen` and email `ivan.nguyen@example.com`
+- **WHEN** the author creates a document after a key test that reported the username `inguyen`, for an account whose email is `ivan.nguyen@example.com`
+- **THEN** the note's front matter contains `owner: inguyen`
+
+#### Scenario: The test could not read a username
+- **WHEN** the author typed the username `inguyen` because the test could not read one, and then creates a document
 - **THEN** the note's front matter contains `owner: inguyen`
 
 ### Requirement: The dates are written in a fixed, sortable format
@@ -92,56 +91,28 @@ date into both.
 - **WHEN** the author creates a document
 - **THEN** `created` and `last_reviewed` hold the same value, in `YYYY-MM-DD` form
 
-### Requirement: A document cannot be created without a verified connection
-The plugin SHALL refuse to create a document unless a connection check has
-succeeded in the running session, and SHALL name what the author does next.
-It SHALL distinguish details that were never entered from details that were
-entered but never checked, because the author's next action differs. No
-document SHALL be created in either case.
+### Requirement: A document cannot be created before setup is complete
+The plugin SHALL refuse to create a document unless all five setup steps are
+complete, and SHALL tell the author "Finish the setup steps in the Docs
+Publisher panel first." No document SHALL be created otherwise. This SHALL hold
+wherever the action is started, the command palette included.
 
-#### Scenario: No connection details have been entered
-- **WHEN** the author runs the "New Document" command in a session where the connection details have not been filled in
-- **THEN** no note is created and the author is told "Add your GitLab details in the plugin's settings first."
+#### Scenario: Setup is incomplete
+- **WHEN** the author runs the "New Document" command with the key step incomplete
+- **THEN** no note is created and the author is told "Finish the setup steps in the Docs Publisher panel first."
 
-#### Scenario: Details entered but never checked
-- **WHEN** the author runs the "New Document" command with all three connection details filled in but no successful connection check in this session
-- **THEN** no note is created and the author is told "Test your connection in the plugin's settings before creating a document."
-
-#### Scenario: The connection check failed
-- **WHEN** the author runs the "New Document" command in a session where the most recent connection check did not succeed
-- **THEN** no note is created and the author is told "Test your connection in the plugin's settings before creating a document."
-
-#### Scenario: The connection was checked at the start of the session
-- **WHEN** the author runs a successful connection check and later creates a document without checking again
-- **THEN** the document is created, and no new connection check is performed on its behalf
-
-### Requirement: A document cannot be created without Developer access
-The plugin SHALL refuse to create a document when the connected account's role
-on the configured project is below Developer, and SHALL name the role the
-author holds and what to do next. This SHALL be enforced wherever the action is
-triggered, including the command palette, and not only by hiding the panel
-control.
-
-#### Scenario: A role that can read but not contribute
-- **WHEN** the author runs the "New Document" command while connected as an account holding Reporter on the configured project
-- **THEN** no note is created and the author is told "Your Reporter access lets you read this project's documents but not add to them. Ask your admin for Developer access."
-
-#### Scenario: A role that grants nothing
-- **WHEN** the author runs the "New Document" command while connected as an account whose role on the configured project grants no access to its documents
-- **THEN** no note is created and the author is told "Your GitLab account does not have access to this project's documents. Ask your admin for access."
-
-#### Scenario: Developer access
-- **WHEN** the author runs the "New Document" command while connected as an account holding Developer, Maintainer, or Owner on the configured project
-- **THEN** the document is created
+#### Scenario: Setup was completed in an earlier session
+- **WHEN** the author completed setup in an earlier session, restarts Obsidian and creates a document without testing the key again
+- **THEN** the document is created, because the last successful test is remembered
 
 ### Requirement: Creating a document makes no request to the platform
-The plugin SHALL create a document using only the connection result it already
-retains from the session's connection check, and SHALL NOT make any request to
-the platform while creating one.
+The plugin SHALL create a document using only what it already holds locally —
+the remembered username and the cached setup progress — and SHALL NOT start a
+process or make any request to the platform while creating one.
 
 #### Scenario: Creating a document while the network is unavailable
-- **WHEN** the author has run a successful connection check earlier in the session, the network then becomes unavailable, and the author creates a document
-- **THEN** the document is created with its front matter filled in, and no request is attempted
+- **WHEN** setup is complete, the network then becomes unavailable, and the author creates a document
+- **THEN** the document is created with its front matter filled in, and no process is started and no request is attempted
 
 ### Requirement: An author can submit a document for review
 The plugin SHALL offer a "Submit for review" action for the currently open
@@ -153,24 +124,21 @@ made.
 - **WHEN** the author selects "Submit for review" for the currently open document
 - **THEN** a modal opens showing a title field, a category field, and the document's target remote path, and no remote call has yet been made
 
-### Requirement: A document cannot be submitted without a verified connection
-The plugin SHALL refuse to open the submit modal unless a connection check
-has succeeded in the running session, and SHALL name what the author does
-next, exactly as document creation already does.
+### Requirement: A document cannot be submitted before setup is complete
+The plugin SHALL refuse to open the submit modal unless all five setup steps
+are complete, and SHALL tell the author "Finish the setup steps in the Docs
+Publisher panel first.", exactly as document creation does. The modal SHALL name
+where the document is being sent — the server and the project path — so that an
+address changed by hand in the plugin's data file after it was tested cannot send
+a document to another server without the author seeing its name.
 
-#### Scenario: Details entered but never checked
-- **WHEN** the author selects "Submit for review" with all three connection details filled in but no successful connection check in this session
-- **THEN** the modal does not open and the author is told "Test your connection in the plugin's settings before creating a document."
+#### Scenario: Setup is incomplete
+- **WHEN** the author selects "Submit for review" with the vault not yet connected
+- **THEN** the modal does not open and the author is told "Finish the setup steps in the Docs Publisher panel first."
 
-### Requirement: A document cannot be submitted without Developer access
-The plugin SHALL refuse to open the submit modal when the connected
-account's role on the configured project is below Developer, and SHALL name
-the role the author holds and what to do next, exactly as document creation
-already does.
-
-#### Scenario: A role that can read but not contribute
-- **WHEN** the author selects "Submit for review" while connected as an account holding Reporter on the configured project
-- **THEN** the modal does not open and the author is told "Your Reporter access lets you read this project's documents but not add to them. Ask your admin for Developer access."
+#### Scenario: The modal says where the document goes
+- **WHEN** the author opens the submit modal for a vault whose project is `docs/kb` on `gitlab.example.com`
+- **THEN** the modal names `gitlab.example.com` and `docs/kb`
 
 ### Requirement: Category is one of nine fixed values
 The submit modal's category field SHALL offer exactly the nine values: User
@@ -226,94 +194,91 @@ and the filename is permitted to drift away from it.
 - **THEN** the submission uses the frozen `doc_id` from front matter, the current filename is not used to derive one, and the frozen value is not overwritten
 
 ### Requirement: Submitting again after an interrupted submit completes the submission
-When a previous submit attempt left the document's target on the remote
-without an open submission against it, pressing "Submit for review" again
+When a previous submit attempt left the document's branch on the remote and the
+branch's tip is a commit this vault built (it is reachable from the commit the
+vault recorded as sent for that document), pressing "Submit for review" again
 SHALL complete the submission rather than fail. The author SHALL NOT be
-offered a separate recovery action, SHALL NOT be asked what happened, and
-SHALL NOT be required to rename the file.
+offered a separate recovery action, SHALL NOT be asked what happened, and SHALL
+NOT be required to rename the file.
 
-The plugin SHALL establish the state of the document's target before making
-any write, and SHALL clear an unfinished previous attempt before submitting
-the note's current content in its place.
+The plugin SHALL fetch before any write and SHALL replace the unfinished branch
+in the same push that sends the note's current content, guarded by the tip it
+saw, so no step clears the branch separately.
 
 #### Scenario: The submission was interrupted after the content reached the remote
-- **WHEN** a previous submit left the document's target on the remote with no submission open against it, and the author selects "Submit for review" again and confirms the modal
-- **THEN** the previous attempt is cleared, the note's current content is submitted in its place, and the author is shown "Waiting for review"
+- **WHEN** a previous submit left the document's branch on the remote with a commit this vault built on its tip, and the author selects "Submit for review" again and confirms the modal
+- **THEN** the unfinished branch is replaced with the note's current content, a review request is asked for, and the author is shown "Waiting for review"
 
 #### Scenario: The note was edited between the failed attempt and the retry
 - **WHEN** the author edits the note after an interrupted submit and then submits again successfully
 - **THEN** what reaches the remote is the note's content as of the successful submit, and no content left by the interrupted attempt survives
 
+#### Scenario: The front-matter write failed after the push
+- **WHEN** a push succeeded but the note's front matter was not completed, so the note carries no `doc_id`, and the author submits again
+- **THEN** the submission completes by the rule above and the front matter is written
+
 #### Scenario: An ordinary first submission is unaffected
-- **WHEN** the author submits a document whose target does not exist on the remote
-- **THEN** the submission proceeds exactly as before, with nothing cleared, and the author is shown "Waiting for review"
+- **WHEN** the author submits a document whose derived branch does not exist on the remote
+- **THEN** the submission proceeds with nothing replaced, and the author is shown "Waiting for review"
 
 ### Requirement: A document already awaiting review is never overwritten
-When a FIRST-TIME submission's derived identity already has an open
-submission on the remote that this vault holds no local record for, the
-plugin SHALL write nothing — not to the remote, not to the note's front
-matter, and not to the tracking record — and SHALL NOT clear or replace
-anything on the remote.
+When a FIRST-TIME submission's derived identity already has a branch on the
+fetched copy whose tip is not a commit this vault built, the plugin SHALL write
+nothing — not to the remote and not to the note's front matter — and SHALL NOT
+replace the branch. Whether the vault built the commit is decided by
+reachability from the commit the vault recorded as sent, never by an email
+address, which changes with the author's identity and machine.
 
-This requirement SHALL NOT apply to a document already tracked locally.
-Resubmitting a document whose resolved state is pending or
-changes-requested pushes an update instead of refusing, per the
-requirement above.
+This requirement SHALL NOT apply to a document that already carries a
+`doc_id`, nor to a branch whose tip this vault built, which is an interrupted
+attempt of its own. A branch the same person pushed from another computer counts
+as someone else's here, and is refused rather than overwritten.
 
-#### Scenario: A first submission's derived identity collides with a stranger's open submission
-- **WHEN** a note with no `doc_id` yet is submitted, and its derived identity already has an open submission on the remote that this vault holds no record for
-- **THEN** nothing is written or deleted anywhere, and the author is told "A document with this file name is already waiting for review. If that's this document, there's nothing more to do. If it's a different one, rename the file and submit again."
+#### Scenario: A first submission's derived identity collides with someone else's branch
+- **WHEN** a note with no `doc_id` yet is submitted and its derived identity already has a branch on the remote whose tip this vault did not build
+- **THEN** nothing is written or replaced anywhere, and the author is told "A document with this file name is already waiting for review. If that's this document, there's nothing more to do. If it's a different one, rename the file and submit again."
 
 #### Scenario: A tracked document's own resubmit is not refused
-- **WHEN** a document already tracked locally, whose resolved state is pending or changes-requested, is resubmitted
-- **THEN** this requirement does not apply, and the resubmit proceeds as an update per the requirement above
+- **WHEN** a document that already carries a `doc_id` and is waiting for review is resubmitted
+- **THEN** this requirement does not apply, and the resubmit proceeds as an update
 
-### Requirement: Resubmitting a pending or changes-requested document pushes an update
-When the author resubmits a document whose resolved state is pending or
-changes-requested, the plugin SHALL commit the note's current content to
-that document's existing tracked branch. It SHALL NOT create a new branch
-and SHALL NOT open a new submission.
+### Requirement: Resubmitting a document waiting for review pushes an update
+When the author resubmits a document whose derived state is pending, the plugin
+SHALL build a commit carrying the note's current content on the fetched tip of
+that document's existing branch and push it there. It SHALL NOT start a second
+review for the same branch.
 
-Pushing the update SHALL NOT itself change the document's displayed state.
-A document that was changes-requested because of an unresolved review
-thread MAY still display as changes-requested immediately afterward — only
-resolving the thread, or the remote otherwise agreeing the review moved on,
-changes what the next refresh shows.
+The author SHALL be told "Your update was sent." The document SHALL remain
+pending.
 
 #### Scenario: Resubmitting a pending document
-- **WHEN** the author edits and resubmits a document whose resolved state is pending
-- **THEN** the note's current content is committed to the document's existing tracked branch, no new branch is created, and no new submission is opened
+- **WHEN** the author edits and resubmits a document whose derived state is pending
+- **THEN** a commit with the note's current content is pushed on top of the existing branch, a reviewer's earlier commits remain on it, and the author is told "Your update was sent."
 
-#### Scenario: Resubmitting a changes-requested document
-- **WHEN** the author edits and resubmits a document whose resolved state is changes-requested
-- **THEN** the note's current content is committed to the document's existing tracked branch the same way, and the document's displayed state is left to the next refresh rather than optimistically changed
+#### Scenario: The panel still shows it waiting
+- **WHEN** an update has been sent
+- **THEN** the document is shown as "Waiting for review" and is not edited
 
 ### Requirement: Resubmitting a published document opens a new review cycle
-When the author resubmits a document whose resolved state is published, the
-plugin SHALL cut a fresh branch from the project's current default branch
-under that document's frozen identity, commit the note's current content to
-it as an update to the file already there, and open a new submission. The
-author SHALL be shown the same confirmation as a first submission.
+When the author resubmits a document whose derived state is published, the
+plugin SHALL build a commit on the fetched default branch carrying the note's
+current content, push it to that document's branch asking for a review request,
+and tell the author "Waiting for review", exactly as for a first submission.
 
 #### Scenario: Resubmitting a published document
-- **WHEN** the author edits and resubmits a document whose resolved state is published
-- **THEN** a fresh branch is cut from the current default branch, the note's content is committed to it as an update, a new submission is opened, and the author is told "Waiting for review"
-
-#### Scenario: The update commit carries the file's current identifier
-- **WHEN** a published document is resubmitted
-- **THEN** the commit is made against the file's current commit identifier on the default branch, so it fails rather than silently overwriting if that file changed after the resolved state was read
+- **WHEN** the author edits and resubmits a document whose derived state is published
+- **THEN** a commit is built on the fetched default branch, pushed to the document's branch with a review request asked for, and the author is told "Waiting for review"
 
 ### Requirement: Resubmitting a document that was not accepted opens a new review cycle
-When the author resubmits a document whose resolved state is not accepted,
-the plugin SHALL clear the abandoned branch from the prior cycle, cut a
-fresh branch from the project's current default branch under that
-document's frozen identity, commit the note's current content to it as a
-new file, and open a new submission. This clearing SHALL NOT be surfaced to
-the author as a distinct step or choice.
+When the author resubmits a document whose derived state is closed, the plugin
+SHALL build a commit on the fetched default branch carrying the note's current
+content and push it to the document's branch, replacing anything left from the
+prior cycle in that one push, asking for a review request. This replacing SHALL
+NOT be surfaced to the author as a distinct step or choice.
 
 #### Scenario: Resubmitting a document that was not accepted
-- **WHEN** the author edits and resubmits a document whose resolved state is not accepted
-- **THEN** the prior cycle's abandoned branch is cleared, a fresh branch is cut from the current default branch, the note's content is committed as a new file, a new submission is opened, and the author is told "Waiting for review"
+- **WHEN** the author edits and resubmits a document whose derived state is closed
+- **THEN** a fresh commit is pushed over the prior cycle's branch in one push, a review request is asked for, and the author is told "Waiting for review"
 
 ### Requirement: A duplicate `doc_id` across two local notes blocks a resubmit
 Before any write, the plugin SHALL refuse a resubmit if another note in the
@@ -340,188 +305,124 @@ the move.
 - **WHEN** the note's current path differs from the remote path only in letter case
 - **THEN** the resubmit is refused, the same as any other path mismatch
 
-### Requirement: A first submission is refused when its target path already holds a published document
-This capability SHALL, before writing anything, refuse a submission for
-which no `doc_id` yet exists in front matter if a file already exists at
-that note's path on the project's default branch, regardless of whether any
-branch or merge request for that path currently exists. It SHALL NOT perform
-this check for a document that already carries a `doc_id`.
+### Requirement: A first submission is refused when its target path holds a document this vault has not received
+This capability SHALL, before writing anything, refuse a submission for a note
+that carries no `doc_id` when the fetched default branch holds a file at that
+note's path and the vault's last synced version does not. The author SHALL be
+told "A document already exists at this path on GitLab that you haven't
+downloaded yet. Get updates first, then try again." It SHALL NOT perform this
+check for a note that carries a `doc_id`, nor for a path the vault has already
+received.
 
-#### Scenario: A first submission collides with an already-published document
-- **WHEN** a note with no `doc_id` is submitted and a file already exists at its path on the project's default branch
-- **THEN** the submission is refused before any remote write, and nothing is created or deleted
+#### Scenario: Someone published at this path since the last update
+- **WHEN** a note with no `doc_id` is submitted and the fetched default branch holds a file at its path that the last synced version does not
+- **THEN** nothing is written anywhere and the author is told "A document already exists at this path on GitLab that you haven't downloaded yet. Get updates first, then try again."
 
 #### Scenario: A document's own revision is never checked against itself
 - **WHEN** a note that already carries a `doc_id` is submitted again
-- **THEN** this check does not run, since that document's path is already its own
+- **THEN** this check does not run
 
 #### Scenario: A first submission proceeds when the path is free
-- **WHEN** a note with no `doc_id` is submitted and no file exists at its path on the project's default branch
+- **WHEN** a note with no `doc_id` is submitted and the fetched default branch holds no file at its path
 - **THEN** this check does not block the submission
 
-#### Scenario: The check does not succeed
-- **WHEN** the existence check fails for any reason
+#### Scenario: The check cannot be made
+- **WHEN** the fetch fails or the fetched copy cannot be read
 - **THEN** the submission is refused and nothing is written, rather than proceeding on an assumption that the path is free
-
-### Requirement: A refused first submission offers to recover the document already there
-When a submission is refused under the requirement above, this capability
-SHALL offer the author a way to recover the already-existing document into
-the vault, using the content already read while performing the check.
-
-#### Scenario: The refusal offers recovery
-- **WHEN** a first submission is refused because a document already exists at its path
-- **THEN** the author is offered a way to recover that document rather than only being told the submission failed
-
-### Requirement: A recovered document is restored only to its original remote path
-This capability SHALL create a recovered document's note at exactly the
-remote path its content was read from, and SHALL NOT place it at any other
-local path.
-
-#### Scenario: Recovery uses the exact remote path
-- **WHEN** a document is recovered
-- **THEN** the note is created at the same path, relative to the vault root, that its content was read from on the remote
-
-### Requirement: Recovery never overwrites a note already at its target path
-This capability SHALL refuse to recover a document whose target path is
-already occupied by a note in the vault, and SHALL write nothing in that
-case.
-
-#### Scenario: The target path is already occupied
-- **WHEN** recovery's target path already holds a note
-- **THEN** recovery is refused and neither that note nor any other file is modified
-
-#### Scenario: The target path is free
-- **WHEN** recovery's target path holds no note
-- **THEN** a new note is created there with the recovered content
 
 ### Requirement: Front matter is completed only after the document reaches the remote
 The plugin SHALL NOT write `title`, `category`, or `doc_id` into the note's
-front matter until both the remote commit and the merge request have
-succeeded. On any failure before those remote writes have succeeded —
-including a failed check of the target's state, a failed clearing of a
-previous attempt, and a refusal because a submission is already awaiting
-review — the note's front matter SHALL remain exactly as it was before the
-submit attempt. A failure of the front-matter write itself, after the remote
-writes succeeded, may leave the front matter incomplete; that case is covered
-by "A submission records the document before writing its front matter".
+front matter until the push has succeeded. A push that succeeded without a
+review request counts as reaching the remote. On any failure before the push
+has succeeded — including a failed fetch, a refusal, and a failed push — the
+note's front matter SHALL remain exactly as it was before the submit attempt.
+
+The commit SHALL carry `title`, `category` and `doc_id` in the note's content,
+merged in memory, so the remote copy is complete even though the local write
+happens afterwards. The local write SHALL then put exactly the committed text
+into the note — not re-serialise the front matter — provided the note still holds
+what it held when it was read for the submission; otherwise the note is left as
+it is. A note that differs from what was pushed by even one byte would read as
+edited at once.
 
 #### Scenario: Front matter after a successful submission
 - **WHEN** a document's first submission completes successfully with title "CEPAS 3 Payments Fail with Error 200" and category "Diagnostic Reference"
 - **THEN** the note's front matter now contains `title: CEPAS 3 Payments Fail with Error 200`, `category: Diagnostic Reference`, and `doc_id` set to the filename that was current at confirm time
 
+#### Scenario: The note equals what was pushed
+- **WHEN** a first submission succeeds and the note is written back
+- **THEN** the note's bytes are identical to the file pushed, and the document is not reported as edited
+
+#### Scenario: The author kept typing during the push
+- **WHEN** the note changed between being read for the submission and the push finishing
+- **THEN** the note is left as the author has it, the document reads as edited, and nothing the author typed is overwritten
+
 #### Scenario: Front matter after a failed submission
-- **WHEN** a document's first submission attempt fails before its remote commit and merge request have both succeeded, for any reason
+- **WHEN** a document's first submission attempt fails before its push has succeeded, for any reason
 - **THEN** the note's front matter contains none of `title`, `category`, or `doc_id`
 
-#### Scenario: Front matter after a refusal because something is already awaiting review
-- **WHEN** the submit is refused because an open submission already exists for the document's target
+#### Scenario: Front matter after a refusal
+- **WHEN** the submit is refused because a different person's branch already exists for the document's target
 - **THEN** the note's front matter is unchanged, and in particular no `doc_id` is written
 
-### Requirement: A submission records the document before writing its front matter
-Once a first submission's remote writes have succeeded, the plugin SHALL
-persist the document's tracking record BEFORE writing `doc_id`, `title` or
-`category` into the note, so that no failure between the two can leave work on
-the remote that nothing locally describes.
-
-The ordering is the requirement, not an implementation note. A submission has
-two halves, and the remote half is the one that cannot be undone: once a branch
-and a merge request exist, the document exists. If the local half then fails
-part-way, what matters is which part survived. Recording first means the worst
-case is a tracked document whose front matter is incomplete — a state this
-capability already knows how to finish, since a note carrying `doc_id` but no
-`category` has not been through a first submit in this vault and its next
-submit collects and writes both. Recording last means the worst case is a note
-with no `doc_id` at all, which no surface can find: the panel lists documents
-by `doc_id`, reconciliation matches by `doc_id`, and recovery is offered by
-`doc_id`. The document then exists on the remote and nowhere else.
-
-The edit baseline SHALL still describe the note as it stands after the
-front-matter write, so recording the document early SHALL NOT record a baseline
-taken before that write.
-
-#### Scenario: A first submission completes normally
-- **WHEN** a document's first submission succeeds end to end
-- **THEN** it is tracked, its front matter carries `doc_id`, `title` and `category`, and its edit baseline describes the note as written
-
-#### Scenario: The front-matter write fails after the remote writes succeeded
-- **WHEN** a first submission's branch and merge request are created and the front-matter write then fails
-- **THEN** a tracking record for the document already exists, so the document is listed, reconciled and visible to the author rather than existing only on the remote
-
-#### Scenario: A submission that failed part-way is resubmitted
-- **WHEN** the author submits a document that was recorded but whose front matter was left incomplete
-- **THEN** the submission collects and writes the missing fields rather than refusing, exactly as it does for any note carrying `doc_id` and no `category`
-
-#### Scenario: The remote writes fail
-- **WHEN** a first submission's branch, commit or merge request does not succeed
-- **THEN** no tracking record is written, because there is nothing on the remote for it to describe
+#### Scenario: The remote copy carries the front matter
+- **WHEN** a first submission succeeds
+- **THEN** the content on the document's branch carries `title`, `category` and `doc_id`
 
 ### Requirement: A failed check of the target's state stops the submission
-When the plugin cannot establish whether the document's target exists, it
-SHALL abort the submission before any write and SHALL NOT proceed as though
-the target were absent.
+When the plugin cannot establish the state of the document's target — the fetch
+fails or the fetched copy cannot be read — it SHALL abort the submission before
+any write and SHALL NOT proceed as though the target were absent.
 
-Where the check was refused because the credential lacks a permission, the
-plugin SHALL report that as a permission failure and SHALL name the missing
-permission when the platform reported one. It SHALL NOT describe such a
-failure as a connection problem: a retry cannot resolve a permission the
-credential was never granted, so advising one sends the author to do
-something that can never work.
+Where the failure is a setup problem (the key is no longer accepted, git is
+missing, the project is not found), the plugin SHALL show that setup problem's
+message and return the panel to its step, and SHALL NOT describe it as a
+connection problem: a retry cannot resolve a key GitLab does not accept.
 
-#### Scenario: The target's state cannot be read
-- **WHEN** the check of the document's target fails for any reason other than the target being explicitly reported absent, and the cause is not an insufficient permission
-- **THEN** no write and no deletion is attempted, the note's front matter is unchanged, no tracking record is created, and the author is told "Submit didn't go through. Check your connection and submit again."
+#### Scenario: The fetch fails because the network is down
+- **WHEN** the fetch before a submission fails because the server cannot be reached
+- **THEN** no write is attempted, the note's front matter is unchanged, and the author is told "Submit didn't go through. Check your connection and submit again."
 
-#### Scenario: The credential lacks permission to check the target's state
-- **WHEN** the check of the document's target, or of whether anything is open against it, is refused because the credential lacks a required permission
-- **THEN** no write and no deletion is attempted, the note's front matter is unchanged, no tracking record is created, and the author is told their access is missing a permission, naming it when the platform reported one
-
-### Requirement: A failure while clearing a previous attempt is reported as its own outcome
-When clearing an unfinished previous attempt does not succeed, the plugin
-SHALL abort the submission before writing anything and SHALL tell the author
-that the clearing step is what failed, so that the failure is distinguished
-from a submission that reached nothing at all.
-
-Where the clearing was refused for a missing permission, naming that
-permission SHALL take precedence over naming the step. Which step failed is
-of no use to an author who cannot act on it, whereas the permission's name is
-the one thing that gets it fixed.
-
-#### Scenario: The previous attempt cannot be cleared
-- **WHEN** an unfinished previous attempt is found and clearing it does not succeed, and the cause is not an insufficient permission
-- **THEN** no content is submitted, the note's front matter is unchanged, no tracking record is created, and the author is told "Submit didn't go through while clearing up an earlier attempt. Check your connection and submit again."
-
-#### Scenario: The credential lacks permission to clear the previous attempt
-- **WHEN** clearing an unfinished previous attempt is refused because the credential lacks a required permission
-- **THEN** no content is submitted, the note's front matter is unchanged, no tracking record is created, and the author is told their access is missing a permission, naming it when the platform reported one
+#### Scenario: The fetch fails because the key is no longer accepted
+- **WHEN** the fetch before a submission fails because GitLab does not recognise the key
+- **THEN** no write is attempted, the note's front matter is unchanged, the author is told "GitLab doesn't recognise this key yet. Add it on GitLab's SSH keys page, then test again.", and the panel shows the key step
 
 ### Requirement: A submit failure is reported as one undifferentiated outcome
-The plugin SHALL NOT distinguish, in what it tells the author, between the
-remaining causes of a submit failure — a failure of unknown outcome such as a
-dropped connection, a rejected write, or an unexpected response. All SHALL
-produce the same message, naming the same recovery action: submitting again.
+For every cause of a submit failure other than those with their own message
+below, the plugin SHALL tell the author the same thing and name the same
+recovery action: "Submit didn't go through. Check your connection and submit
+again." This covers a dropped connection, a timeout and an unexpected response.
+It SHALL NOT name a cause and SHALL NOT advise renaming the file: renaming
+re-derives a different permanent `doc_id` for the same document, so advising it
+as a general remedy makes an interrupted submit unrecoverable.
 
-The message SHALL NOT name a cause and SHALL NOT advise renaming the file.
-Renaming re-derives a different permanent `doc_id` for the same document, so
-advising it as a general remedy makes an interrupted submit unrecoverable.
-Renaming remains the correct advice in exactly two narrower places, each with
-its own message: a filename that is not ref-legal, and a target that already
-has a submission awaiting review.
+These causes have their own message, each naming what to do:
 
-The branch-already-exists cause that this requirement previously covered no
-longer reaches the author: the target's state is established before any
-write, and that case is handled by completing the submission instead.
+- The server's access rules forbid the push: "GitLab did not accept this document. Your account may not be allowed to add documents to this project. Ask your admin for Developer access."
+- The branch moved between the fetch and the push: "Someone changed this document on GitLab while you were sending it. Get updates, then send again."
+- The push succeeded and no review request was opened: "Your document was sent, but a review request could not be opened automatically. Open GitLab to request a review." with a control "Open to request review".
+
+A setup problem SHALL show its setup message and return the panel to its step.
 
 #### Scenario: The connection drops mid-submission
-- **WHEN** the network becomes unavailable after a write has been sent but before its outcome is known
+- **WHEN** the network becomes unavailable after the push has started but before its outcome is known
 - **THEN** the author is told "Submit didn't go through. Check your connection and submit again."
 
-#### Scenario: A write is rejected for an unexpected reason
-- **WHEN** a write fails with an unexpected response, and the cause is not an insufficient permission
+#### Scenario: A push is rejected for an unexpected reason
+- **WHEN** a push fails with an unclassified result
 - **THEN** the author is told the same message as the dropped-connection case, with no attempt to name which occurred
 
-#### Scenario: The target already existed
-- **WHEN** the document's target already exists on the remote with no open submission against it
-- **THEN** the author is not shown a failure at all, and the submission completes
+#### Scenario: The account may not write to the project
+- **WHEN** the server's rules forbid the push
+- **THEN** the author is told "GitLab did not accept this document. Your account may not be allowed to add documents to this project. Ask your admin for Developer access." and nothing on the remote changed
+
+#### Scenario: The branch moved
+- **WHEN** the document's branch on the remote no longer holds what the plugin fetched
+- **THEN** nothing is overwritten and the author is told "Someone changed this document on GitLab while you were sending it. Get updates, then send again."
+
+#### Scenario: The push succeeded and no review request opened
+- **WHEN** the server accepts the push but no review request is created
+- **THEN** the author is told "Your document was sent, but a review request could not be opened automatically. Open GitLab to request a review.", is offered "Open to request review", and the document reads "Waiting for review"
 
 ### Requirement: A successful submission confirms with the pending state's label
 On a successful first submission, the plugin SHALL confirm to the author
@@ -533,35 +434,34 @@ submission-tracking.
 - **THEN** the author is shown "Waiting for review"
 
 ### Requirement: Reset replaces a note's content with the version under review
-The plugin SHALL, on the author's explicit request for a document whose
-resolved state is pending or changes-requested, replace the open note's
-entire content with the content that document currently carries on its own
-tracked branch. It SHALL write the remote's content verbatim, including
-front matter, so the note afterwards matches what reviewers are looking at
-byte for byte.
+The plugin SHALL, on the author's explicit request for a document whose derived
+state is pending, replace the open note's entire content with the content that
+document currently carries on its own fetched branch. It SHALL write that
+content verbatim, including front matter, so the note afterwards matches what
+reviewers are looking at byte for byte.
 
-It SHALL NOT change the document's state, its branch, or its remote path,
-and SHALL NOT re-assert any front matter field of its own. Resetting local
-content changes nothing about where the review stands.
-
-It SHALL record the edit baseline for the note it has just written, so a
-document reset to the version under review is not afterwards reported as
-edited. That baseline describes the note rather than the review, so writing
-it is consistent with the paragraph above rather than an exception to it —
-leaving it stale would assert that the note differs from a version it is
-byte-identical to.
+It SHALL NOT change the document's state or its branch, and SHALL NOT re-assert
+any front matter field of its own. A reset note SHALL NOT afterwards be reported
+as edited, because the note now matches the branch it was last sent as. It SHALL
+record the branch tip it brought into the note as this vault's last-sent commit
+for the document, so the commits the author has now seen stop counting as someone
+else's and a later update is not refused for them.
 
 #### Scenario: A note with local edits is reset
 - **WHEN** the author resets a document whose note has been edited since it was last submitted
-- **THEN** the note's content is replaced by the content on that document's tracked branch, front matter included, and the note matches that version exactly
+- **THEN** the note's content is replaced by the content on that document's branch, front matter included, and the note matches that version exactly
 
-#### Scenario: The document's state is untouched
-- **WHEN** a document whose state is changes-requested is reset
-- **THEN** its state is still changes-requested afterwards, and neither its branch nor its remote path was changed
+#### Scenario: A reviewer's change on the branch is brought in
+- **WHEN** a reviewer added a commit to the document's branch and the author resets after the next fetch
+- **THEN** the note matches the branch tip, including the reviewer's change
+
+#### Scenario: Sending after a reset is not refused
+- **WHEN** the author resets a document, edits the note, and sends an update
+- **THEN** the update is sent, because the commits the reset brought in are recorded as seen
 
 #### Scenario: The reset note is not reported as edited
 - **WHEN** a document is reset and its note is not edited afterwards
-- **THEN** the panel does not report that document as edited, because its note matches what the plugin last wrote
+- **THEN** the panel does not report that document as edited
 
 #### Scenario: Editing after a reset
 - **WHEN** the author edits a note after resetting it
@@ -658,25 +558,6 @@ publishing, and refusing would make a typo block a document.
 - **WHEN** a note's embed resolves to a location outside the vault
 - **THEN** that embed is skipped and the submission proceeds
 
-### Requirement: An attachment already on the remote is updated, not recreated
-For each file a submission carries, the plugin SHALL determine whether that
-path already exists on the ref being committed to, and SHALL update it
-carrying its current commit identifier where it does, or create it where it
-does not. This SHALL apply to attachments exactly as it already applies to
-the note.
-
-#### Scenario: An image shared with other documents
-- **WHEN** the author submits a document embedding an image whose path already exists on the remote, because other documents embed the same image
-- **THEN** that image is committed as an update carrying its current commit identifier, not as a new file
-
-#### Scenario: An image nobody has published before
-- **WHEN** the author submits a document embedding an image whose path does not exist on the remote
-- **THEN** that image is committed as a new file
-
-#### Scenario: A shared image changed since it was read
-- **WHEN** a submission carries an update to a shared image whose remote copy changed after its commit identifier was read
-- **THEN** the write is refused rather than silently overwriting it, and the author is told the document changed since they last opened it
-
 ### Requirement: The plugin never deletes a remote attachment
 The plugin SHALL NOT delete any attachment from the remote, under any
 circumstance, including when a note stops embedding an image or embeds it
@@ -686,125 +567,170 @@ from a different path.
 - **WHEN** the author removes an embed from a note and submits the document again
 - **THEN** the image remains on the remote, and the submission neither deletes it nor fails because of it
 
-### Requirement: An imported document is written at its exact remote path
-The plugin SHALL create an imported document's note at exactly the path it
-occupies on the remote, relative to the vault root, and SHALL NOT place it at
-any other local path. The configurable default directory for NEW documents
-SHALL NOT apply to an import: a new document has no identity yet and may go
-anywhere, whereas an imported document's path is already half of its
-identity.
+### Requirement: A note at a path the vault has received is submitted as a revision of that document
+When a note carrying no `doc_id` sits at a path the vault's last synced version
+holds, the plugin SHALL treat the submission as a revision of that published
+document: it SHALL derive the `doc_id` from the filename by the same rule as a
+first submission, freeze it in the note, and proceed as for a published
+document, building the commit on the fetched default branch. The submit modal
+SHALL say "This replaces the published version of this document. Reviewers will
+see what changed." The derived identity SHALL still satisfy "A first
+submission's identity must be unique across the project".
 
-#### Scenario: Importing a document from a nested folder
-- **WHEN** the author imports a document the remote holds at `Products/Barcode-Scanner/SOPs/BS-SOP-001_Help-Customer-Setup.md`
-- **THEN** the note is created at that same path in the vault, with any missing folders created along the way
+This is what makes a received document editable and submittable: a received note
+that carries no `doc_id` (one published before this plugin, or by hand) is
+neither refused as a collision nor treated as new.
 
-#### Scenario: The default directory setting is ignored for imports
-- **WHEN** a default directory for new documents is configured and the author imports a document
-- **THEN** the imported note is created at its remote path, and the configured directory is not consulted
+#### Scenario: Editing a received document that has no identity yet
+- **WHEN** the author edits a document received by Get updates whose front matter carries no `doc_id`, and submits it
+- **THEN** the submission is not refused for a path that already exists, the modal said "This replaces the published version of this document. Reviewers will see what changed.", and a new review cycle is opened with `doc_id` frozen from the filename
 
-### Requirement: Importing freezes the document's identity
-The plugin SHALL write `doc_id` into an imported note's front matter at the
-moment of import, derived from the document's remote filename by the same
-rule a first submit uses.
+#### Scenario: A received document's other front matter is untouched
+- **WHEN** a received document whose front matter carries `title`, `owner` and `last_reviewed` written by someone else is submitted
+- **THEN** those values are preserved exactly and the plugin adds only the fields it completes
 
-An imported document's identity is already fixed on the remote — its name and
-path were decided by whoever published it, and a document whose local path has
-drifted from its remote one is refused rather than followed. The freedom to
-rename freely before the identity is frozen, which a document authored in this
-vault has until its first submit, does not exist for an imported one.
+### Requirement: A first submission's identity must be unique across the project
+Before any write, the plugin SHALL refuse a submission whose derived `doc_id`
+would also be derived from any other file in the fetched default branch's tree,
+whatever folder that file is in, and SHALL write nothing. The author SHALL be
+told "Another document in the project already has this file name, so this one
+can't be sent. Rename this file and try again."
 
-Freezing it here is what makes an imported document submittable: a note
-carrying `doc_id` is resubmitted rather than submitted for the first time, so
-the first-submit path's collision check — which would otherwise refuse every
-imported document, because a file does exist at its path on the default
-branch — does not apply to it.
+A document's identity is its filename and not its path, so two files sharing a
+name would share one branch and the second could not be sent (see
+`docs/document-naming.md`). A note that already carries a `doc_id` SHALL NOT be
+checked, because its uniqueness was established when it was frozen.
 
-#### Scenario: An imported note carries its identity immediately
-- **WHEN** the author imports a document
-- **THEN** the resulting note's front matter carries `doc_id`, derived from the remote filename
+#### Scenario: A name another document already uses
+- **WHEN** the author submits a note named `README.md` and another file in the project derives the same identity
+- **THEN** nothing is written and the author is told "Another document in the project already has this file name, so this one can't be sent. Rename this file and try again."
 
-#### Scenario: An imported document can be edited and submitted
-- **WHEN** the author imports a document, edits it, and submits it
-- **THEN** the submission is not refused for a path that already exists, and a new review cycle is opened for it
+#### Scenario: A name that is unique
+- **WHEN** no other file in the project derives the identity
+- **THEN** this check does not block the submission
 
-#### Scenario: An imported document's other front matter is untouched
-- **WHEN** the author imports a document whose front matter carries `title`, `owner` and `last_reviewed` written by someone else
-- **THEN** those values are preserved exactly, and the plugin adds only `doc_id`
+#### Scenario: A frozen identity is not rechecked
+- **WHEN** a note that already carries a `doc_id` is submitted again
+- **THEN** this check does not run
 
-### Requirement: An import is refused rather than colliding with what the vault already has
-The plugin SHALL refuse an import, writing nothing, when a note in the vault
-already carries the `doc_id` the import would freeze, or when a note already
-occupies the target path. It SHALL name what it collided with.
+### Requirement: A document changed by someone else since the author last saw it is never overwritten
+Before any write, for every file a submission carries, the plugin SHALL compare
+the file in the fetched default branch with the file in the vault's last synced
+version. When they differ, and the vault's note is not the same as the fetched
+one, and the fetched one is not the version this vault last sent for that file
+(the author's own change, merged), the plugin SHALL write nothing and tell the
+author "Someone changed this document on GitLab since you last got updates. Get
+updates, then send again."
 
-#### Scenario: A note in the vault already carries this document's identity
-- **WHEN** the author imports a document whose `doc_id` a note already in the vault carries, including one the author moved to a different folder
-- **THEN** the import is refused, nothing is written, and the author is told which note already has it
+When the document is waiting for review and the fetched branch holds a commit
+that changes one of the files being sent and that this vault did not build and
+has not brought in by a reset, the plugin SHALL write nothing and tell the author
+"The version under review has changes that aren't in your note. Use Reset to
+bring them in, then make your edits again." The text does not say who made them:
+the same author on another computer reads the same.
 
-#### Scenario: A note already occupies the target path
-- **WHEN** the author imports a document whose remote path a note in the vault already occupies
-- **THEN** the import is refused and neither that note nor any other file is modified
+This replaces the per-file staleness identifier the REST path carried, which kept
+a publish from silently overwriting a newer version.
 
-### Requirement: Imported and recovered documents bring their images with them
-The plugin SHALL fetch the attachments an imported or recovered document
-embeds and write each at its own remote path, so the document renders as it
-does on the remote.
+#### Scenario: A reviewer merged a change after the author last got updates
+- **WHEN** the author edits a published document and the fetched default branch holds a newer version of it than the last synced one
+- **THEN** nothing is written and the author is told "Someone changed this document on GitLab since you last got updates. Get updates, then send again."
 
-Attachments SHALL be resolved after the note is written, through the same
-resolution the submit path uses, since that resolution reads the embeds
-Obsidian recorded for the note and a document that is not yet in the vault
-has none recorded.
+#### Scenario: The author's note already equals the newer version
+- **WHEN** the vault's note is byte-identical to the fetched default branch's file
+- **THEN** this check does not block, and there is nothing further to send for that file
 
-That resolution SHALL be asked of the REMOTE's own file listing rather than
-of the vault. The vault cannot answer it: a newly arrived document's images
-are not in the vault, which is the entire reason they are being fetched.
+#### Scenario: The merged change is the author's own
+- **WHEN** the default branch's version equals the version this vault last sent and the author edited the note again
+- **THEN** this check does not block, and the update is sent
 
-Where a document embeds a file by NAME and the remote holds more than one
-file of that name, the plugin SHALL report that it could not place the embed
-rather than choosing one. Only the editor's own link resolution decides which
-file a name means, and a second implementation of that rule would disagree
-with the first exactly when it mattered.
+#### Scenario: Someone committed to the document's branch
+- **WHEN** someone else added a commit to a document's branch and the author sends an update from a note written before it
+- **THEN** nothing is written and the author is told "The version under review has changes that aren't in your note. Use Reset to bring them in, then make your edits again."
 
-#### Scenario: Importing a document that embeds images
-- **WHEN** the author imports a document embedding two images
-- **THEN** both images are written to the vault at their own remote paths and the document's embeds resolve
+#### Scenario: The author changed their email
+- **WHEN** every commit on the branch was built by this vault under an earlier email and the author sends an update
+- **THEN** the update is sent, because the check does not compare emails
 
-#### Scenario: Recovering a document that embeds images
-- **WHEN** the author recovers a document embedding an image
-- **THEN** the image is fetched and written too, rather than the note being restored with a broken embed
+#### Scenario: A shared image changed on the project
+- **WHEN** a submission carries an image whose copy on the fetched default branch differs from the last synced version and from the vault's
+- **THEN** nothing is written and the author is told "Someone changed this document on GitLab since you last got updates. Get updates, then send again."
 
-#### Scenario: An attachment cannot be fetched
-- **WHEN** a document's note is written but one of its attachments cannot be fetched
-- **THEN** the note remains, the author is told which attachment did not arrive, and the failure is not silent
+### Requirement: An identity read from a note is checked before it is used
+Before building a branch name from a note's `doc_id`, the plugin SHALL check that
+the value is valid in a branch name by the same rule as a first submission, and
+SHALL refuse, writing nothing, when it is not. The author SHALL be told "This
+note's identity isn't valid, so it can't be sent. Remove the doc_id line from the
+note's properties and submit again." A received note's `doc_id` is data from
+another person and is not trusted as already valid.
 
-#### Scenario: An attachment already in the vault
-- **WHEN** an imported document embeds an image the vault already holds at that path
-- **THEN** the existing file is left alone rather than overwritten
+#### Scenario: A received note with an unusable identity
+- **WHEN** a note received from the project carries a `doc_id` containing a space or `..`, and the author submits it
+- **THEN** nothing is written or sent and the author is told "This note's identity isn't valid, so it can't be sent. Remove the doc_id line from the note's properties and submit again."
 
-#### Scenario: A document embeds an image by a name the remote holds several of
-- **WHEN** an imported document embeds `diagram.png` and the remote holds a file of that name in more than one folder
-- **THEN** no image is written for that embed, and the author is told which embed could not be placed
+#### Scenario: A valid identity
+- **WHEN** the note's `doc_id` is valid in a branch name
+- **THEN** this check does not block the submission
 
-#### Scenario: A document embeds another document
-- **WHEN** an imported document embeds another note rather than an attachment
-- **THEN** nothing is fetched for it and nothing is reported, since embedding one document in another is out of scope for this plugin entirely
+### Requirement: An attachment already on the project is carried as it is in the vault
+For each file a submission carries, the plugin SHALL commit the vault's bytes at
+that path whether or not the path already exists on the project: a file that is
+byte-identical to the project's changes nothing, and a different one replaces it
+in the new commit, subject to "A document changed by someone else since the
+author last saw it is never overwritten". The plugin SHALL NOT choose between
+creating and updating.
 
-### Requirement: A submission records the project it submitted to
-A successful submission SHALL record the project it wrote to alongside the
-branch and merge request it created, so that the record it leaves says where
-that work lives and not merely that it exists.
+#### Scenario: An image shared with other documents
+- **WHEN** the author submits a document embedding an image whose path already exists on the project, byte-identical to the vault's
+- **THEN** the image is carried unchanged and the review shows no difference for it
 
-A submission is the other moment, besides a confirmed reconciliation, at which
-a document's project is established by evidence rather than assumption: the
-branch and the merge request were just created there.
+#### Scenario: An image nobody has published before
+- **WHEN** the author submits a document embedding an image whose path does not exist on the project
+- **THEN** the image is added by the commit
 
-#### Scenario: A first submission records its project
-- **WHEN** a document is submitted for the first time and its remote writes succeed
-- **THEN** its record carries the project those writes went to, alongside the branch and merge request
+### Requirement: Submitting does not write a doc_id into the note
+A successful submit SHALL NOT add a `doc_id` property to the note. It SHALL still
+complete `title`, `category` and `owner` as it does now. The identity for a first
+submission SHALL be derived from the file name by the existing rule, checked for
+validity and for uniqueness across the project, and used for the branch and this vault's
+send record. A note that already carries a `doc_id` keeps it untouched. This replaces
+the freezing of identity into the note described by the earlier requirements "A note at
+a path the vault has received is submitted as a revision of that document" and "An
+identity read from a note is checked before it is used"; their other behaviour stands.
 
-#### Scenario: A revision records the project it pushed to
-- **WHEN** a revision is pushed to an existing review
-- **THEN** the record still carries the project that review lives on
+#### Scenario: First submission
+- **WHEN** the author submits a note with `title` and `category` and no `doc_id`
+- **THEN** the note afterwards has no `doc_id` added, the send is made on `doc/<id>` derived from its file name, and the panel lists it as "Waiting for review"
 
-#### Scenario: Submitting a document whose record belongs elsewhere
-- **WHEN** the author submits a document whose existing record carries a different project than the configured one
-- **THEN** it is submitted as a first submission into the configured project, and its record afterwards carries the configured project rather than the previous one
+#### Scenario: Re-submitting after the send record is lost
+- **WHEN** the author submits an already published note on a vault that has no send record
+- **THEN** the identity is re-derived from the file name, and if it equals the identity of the document at that path the submission is a revision of it
+
+### Requirement: A rename during review continues the same branch
+When a note resolves to a document whose review is open and its path differs from the
+path in the send record, a submit SHALL continue the document's existing branch and SHALL
+NOT derive a new identity from the new file name. It SHALL be treated as a move.
+
+#### Scenario: Renamed then edited
+- **WHEN** a note under review is renamed and then edited, and its bytes still equal none of the known versions
+- **THEN** it is not matched by content and is listed under "Not sent yet"; submitting it is a first submission, refused if a review for the same derived identity exists, with the existing message
+
+### Requirement: Submitting a moved published note moves it on the project after confirmation
+When a note resolves to a published document and its path differs from the document's path
+on the project, a submit SHALL ask in plain words, "This note has moved. Submitting will
+move it on the project too, so reviewers see it in its new place.", and only on
+confirmation SHALL build a commit that adds the new path and removes the old one. This
+is the only case in which a submit removes a file from the project. Declining SHALL send
+nothing and change nothing. Files the note embeds are carried as before and never removed.
+
+#### Scenario: Confirmed move
+- **WHEN** the author submits a moved published note and confirms
+- **THEN** one review is opened whose changes show the old path removed and the new path added
+
+#### Scenario: Declined
+- **WHEN** the author declines
+- **THEN** nothing is sent, nothing is written, and the note remains listed as moved
+
+#### Scenario: A move onto a path the project holds
+- **WHEN** the new path already holds a different document on the project
+- **THEN** the submission is refused with the existing "already exists at this path" message and nothing is sent

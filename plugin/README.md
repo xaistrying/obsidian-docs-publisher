@@ -4,23 +4,29 @@ Docs Publisher lets you write documents in Obsidian and send them for review
 without leaving Obsidian. You write, you press a button, a reviewer reads it,
 and it is published. This guide takes about ten minutes to read.
 
-Sections 1–7 are for authors. Section 8 is for the admin or reviewer who sets
+Sections 1–8 are for authors. Section 9 is for the admin or reviewer who sets
 authors up.
 
 - [1. Install the plugin](#1-install-the-plugin)
-- [2. Get an access token](#2-get-an-access-token)
-- [3. Connect to GitLab](#3-connect-to-gitlab)
-- [4. Write and submit a document](#4-write-and-submit-a-document)
-- [5. What each status means, and what to do next](#5-what-each-status-means-and-what-to-do-next)
-- [6. Reset, Restore and Import](#6-reset-restore-and-import)
+- [2. Set up: five steps, shown in the panel](#2-set-up-five-steps-shown-in-the-panel)
+- [3. Write and send a document](#3-write-and-send-a-document)
+- [4. What each status means, and what to do next](#4-what-each-status-means-and-what-to-do-next)
+- [5. Sending changes, and starting again](#5-sending-changes-and-starting-again)
+- [6. Get updates](#6-get-updates)
 - [7. Troubleshooting](#7-troubleshooting)
-- [8. For admins and reviewers](#8-for-admins-and-reviewers)
+- [8. Filename rules](#8-filename-rules)
+- [9. For admins and reviewers](#9-for-admins-and-reviewers)
 
 ---
 
 ## 1. Install the plugin
 
-You need Obsidian **1.5.7 or newer**.
+You need Obsidian **1.5.7 or newer** on a **computer** (Windows, macOS or
+Linux). The plugin does not work on phones or tablets.
+
+You also need **Git** installed on your computer. If you do not have it, the
+panel tells you, with a **Get Git** button that opens the download page. Install
+it with its default choices, then press **Check again** in the panel.
 
 1. Download these three files from the release page: <RELEASE_URL>
    - `main.js`
@@ -38,66 +44,61 @@ You need Obsidian **1.5.7 or newer**.
    run **Open Docs Publisher** from the command palette.
 
 To update later, replace the three files with the new ones. Do not delete the
-folder — it also holds your document list (see section 8).
+folder — it also holds your settings (see section 9), so you will not have to
+set up again.
 
-## 2. Get an access token
+## 2. Set up: five steps, shown in the panel
 
-The access token is what lets the plugin act as you on GitLab. **Treat it like
-a password**: never paste it into a note, a chat message or an email, and never
-share it with anyone, including your admin. Each person creates their own.
+The first time, the panel shows **Set up Docs Publisher** and takes you through
+five steps, one at a time. It always shows the first step that is not done,
+and the same steps are listed in **Settings → Docs Publisher**. You do this once.
 
-1. Sign in to GitLab in your browser.
-2. Go to **User settings → Access tokens** and create a **fine-grained**
-   access token.
-3. Give it a name you will recognise, for example `Docs Publisher`.
-4. Set the expiry date to **one year from today**.
-5. Tick exactly the permissions listed in the plugin's settings, under
-   **Access token** (open Obsidian **Settings → Docs Publisher** to see the
-   list). The same list is in section 8 for your admin. There are two tabs of
-   permissions: most are on **Group and project**, and one, **User (Read)**,
-   is on the separate **User** tab — it is easy to miss. Nothing else is
-   needed.
-6. Create the token and copy it. GitLab shows it only once.
-   You will need it each time you start Obsidian, so keep it somewhere private
-   on your own computer, such as a password manager. **Never keep it inside
-   your vault**: vault files can be synced, and a note can be submitted to
-   GitLab, which would publish the token with it.
+There is no password or token to keep. The plugin uses a **key** instead: a pair
+of files on your computer that lets GitLab recognise it. The private half never
+leaves your computer, and the plugin never reads it.
 
-**When your token expires:** it stops working on its expiry date, and the
-plugin tells you with "Your access token has expired or is incorrect. Check
-you pasted all of it, or create a new one in GitLab." Create a new token with the same steps above and paste it into the plugin. Your GitLab
-address and project ID are remembered, so nothing else needs entering. A
-calendar reminder a week before the date saves you the surprise.
+**Step 1 — Git installed.** If it is not, see section 1.
 
-## 3. Connect to GitLab
+**Step 2 — Add your project's address.** In GitLab, open your project, press the
+**Clone** button, and copy the address under **Clone with SSH**. It starts with
+`git@` or `ssh://`. Open **Settings → Docs Publisher** (the panel has an
+**Open settings** button) and paste it into the address field, then click
+anywhere else. If you paste an address that starts with `https://`, the plugin
+converts it for you. Ask your team lead if you do not know which project to use.
 
-Open Obsidian **Settings → Docs Publisher** and fill in the three fields:
+**Step 3 — Connect this computer to GitLab.**
 
-| Field | What to enter |
-|---|---|
-| **GitLab address** | The address of your GitLab server, for example `https://gitlab.example.com`. Ask your team lead if you don't know it. |
-| **Project ID** | The numeric ID of the project, shown on its overview page in GitLab. A namespace path like `my-group/my-docs` also works. Ask your team lead if you don't know it. |
-| **Access token** | Paste your token from section 2. |
+1. If you already have a key, the plugin finds and uses it. If not, press
+   **Create key**. This makes a key just for Docs Publisher.
+2. Press **Copy key**, then **Open GitLab**. GitLab opens on your **SSH keys**
+   page. Paste the key, give it a name you will recognise, and add it.
+3. Back in Obsidian, press **Test**. You see "Your key works. Connected as
+   *your username*." If the plugin could not read your username, it asks you to
+   type it once.
 
-Then press **Test connection**.
+If your key is protected by a password, the plugin says so and offers to create
+a new key for Docs Publisher: it cannot type a password for you.
 
-- While it checks, you see **Checking…**.
-- When it works, you see **Connected as** *your name* **—** *your role*
-  **access**, for example "Connected as Jane Doe — Developer access". The
-  panel then says **Ready to publish your documentation.** and shows the
-  **New Document** button.
-- If it fails, the message says what to fix. See section 7.
+**Step 4 — Connect this vault to the project.** Press **Connect this vault**.
+Nothing in your vault is changed or replaced: your notes stay exactly as they
+are. You see "This vault is connected to your project."
 
-**What is remembered.** Your GitLab address and project ID are remembered
-after you test the connection. Your access token is kept for this Obsidian
-session only and is never written to disk, so **you paste the token again each
-time you start Obsidian** (then press **Test connection** again). Until you do,
-the panel shows **Not connected yet** with an **Open settings** button.
+> If the vault is already linked to a different project, or holds changes that
+> were never sent, or sits inside a larger project folder, the plugin leaves it
+> alone and says so. Use a different vault for this project.
 
-If your role is not Developer or higher, the panel explains that you can read
-documents but not add to them. Ask your admin for Developer access.
+**Step 5 — Tell us who you are.** Your name and email appear on the documents
+you send. If Git on your computer already has them, this step is already done.
+Otherwise open **Settings → Docs Publisher**, type them, and press **Save**. They
+are saved for this vault only.
 
-## 4. Write and submit a document
+When all five are done the panel says **Ready to publish your documentation.**
+and shows **New Document**.
+
+**What is remembered.** The project address, where your key is stored on your
+computer, your username, and what the last test covered. Nothing secret.
+
+## 3. Write and send a document
 
 ### Create the document
 
@@ -106,16 +107,16 @@ documents but not add to them. Ask your admin for Developer access.
 2. A note named **Untitled document** opens. The plugin has filled in its
    properties for you: `owner` (your GitLab username), `created` and
    `last_reviewed` (today's date), and `lifecycle: active`.
-3. **Rename the note** before you submit. The default name has a space in it,
+3. **Rename the note** before you send it. The default name has a space in it,
    and a document's filename may not contain spaces (see
-   [Filename rules](#filename-rules)). Follow your team's naming convention,
+   [Filename rules](#8-filename-rules)). Follow your team's naming convention,
    for example `BOA-SOP-001_Update-Device-Details`.
 4. **Put the note in the right folder now.** Your vault's folders are the
    project's folders: where the note sits is exactly where it will be
    published.
 5. Write the document. Images you embed in the note are sent with it.
 
-### Submit it for review
+### Send it for review
 
 1. With the note open, press **Submit for review** in the panel (or run
    **Submit for review** from the command palette).
@@ -124,197 +125,274 @@ documents but not add to them. Ask your admin for Developer access.
    - **Category** — choose one of: User Manual, Operational Manual, Release
      FAQ, SOP, Runbook, Configuration Reference, Diagnostic Reference, Known
      Errors, Safe-Action Boundaries.
-   - **Target path** — shows where the document will be published. **Check
-     it.** If it is wrong, close the form, move the note to the right folder,
-     and start again.
+   - **Target path** — where the document will be published. **Check it.** If
+     it is wrong, close the form, move the note to the right folder, and
+     start again.
+   - **Sending to** — the server and project it goes to.
 3. Press **Submit**. You see **Waiting for review**.
 
-> **After the first submit, the note cannot move.** Do not move or rename it
-> afterwards. If you do, the next submit is refused with "This document belongs
-> at … Move the note back there, then submit again."
+> **You can move or rename a note after sending it.** The plugin recognises it
+> by where it sits on the project, by the send it made, or, if you moved it
+> without changing it, by its exact contents. A moved note shows **Moved**
+> beside its status. Press **Submit** and the plugin asks "This note has moved.
+> Submitting will move it on the project too, so reviewers see it in its new
+> place." Choose **Move and submit** and the review shows the old path removed
+> and the new one added; choose **Cancel** and nothing is sent. This is the only
+> time a send removes anything from the project. If you moved the note **and**
+> edited it before sending, the plugin cannot tell it from a new note, so it is
+> listed under **Not sent yet**; move it back, send it, then move it.
 
-The plugin adds `title`, `category` and a document ID to the note's properties
-on the first submit. From then on they are yours: to change the title or
-category later, edit them in the note's properties. The plugin never changes
-them again. Update `last_reviewed` yourself whenever you re-read a document and
-confirm it is still correct.
+The plugin adds `title` and `category` to the note's properties on the send, if
+they are missing. It adds nothing else: there is no document ID in your note.
+From then on the properties are yours: to change the title or category later,
+edit them in the note's properties. The plugin never changes them again. Update
+`last_reviewed` yourself whenever you re-read a document and confirm it is
+still correct. (A note an older version of the plugin sent may carry a `doc_id`
+property. It is left exactly as it is and is read as the same document.)
 
-## 5. What each status means, and what to do next
+**If the review request could not be opened automatically** you see "Your
+document was sent, but a review request could not be opened automatically. Open
+GitLab to request a review." with **Open to request review**. The document did
+arrive; press the button and GitLab opens on the page that asks for the review.
 
-The panel sorts your documents into two lists:
+## 4. What each status means, and what to do next
 
-- **Needs you** — "Documents waiting on you: not sent yet, sent back by a
-  reviewer, or changed since you last sent them."
-- **Waiting on reviewers** — "Sent and unchanged. Nothing to do until a
-  reviewer responds." This list starts folded; its number shows how many
-  documents are in it. Click the heading to open it.
+At the top of the panel are your initials and name with a green "Connected"
+dot, then a banner that says what the project has ("You have the latest
+documents.", "3 updates available", or that the check failed). Under it, a
+**New document** button and two icon buttons (hover for their names): **Get
+updates**, outlined while something is waiting, and **Refresh**, which only
+checks.
 
-When a note is open, its status is also shown above the panel's buttons.
+Under a rule, your notes are sorted into groups. Click a group's title to fold
+or open it; its number is shown beside it. Each row shows the note's name and
+buttons on the first line, then its status with a coloured dot (orange while it
+waits on someone, green when done, red when it needs fixing, blue when moved),
+then its folder; hover the name for its full path.
+
+- **Changes** — documents you sent that now need you: not accepted, or edited
+  or moved since you last sent them. Each has an upload button to send it. When
+  there are none it says "No changes to send."
+- **New** — every note that is not on the project yet, the way git lists new
+  files, each with an upload button. A note with no title or category is listed
+  too, and Submit asks for them. Starts folded, with its number. Hidden folders
+  and Obsidian's own folders are never listed.
+- **Waiting on reviewers** — sent and unchanged. Nothing to do until a reviewer
+  responds. Starts folded; its number shows how many documents are in it.
+- **From the project** — the files **Get updates** would bring in: new,
+  changed, removed, or deleted here (a note you deleted comes back). Starts
+  folded; only the first 50 are named.
+
+The note you have open always has a row of its own above the groups, with its
+status and the send button, whichever group lists it and whether or not that
+group is folded; it is the only row that offers **Reset**. Inside its group the
+same note is marked with a thin bar. Published documents you have not changed
+or moved are listed nowhere else.
 
 | Status | What it means | What to do |
 |---|---|---|
-| **Not submitted yet** | Nobody has seen it yet. | Finish it and press **Submit for review**. |
 | **Waiting for review** | A reviewer has it. | Nothing. If you edit it meanwhile, press **Send update**. |
-| **Changes requested** | A reviewer left comments. | Click **Open in GitLab** on the document's row to read them. Edit the note, then press **Send update**. |
-| **Published** | It is live. | Nothing. To revise it, see below. |
-| **Not accepted** | The reviewer closed it without publishing. | Read why with **Open in GitLab**. To try again, see below. |
+| **Published** | It is live. | Nothing. To revise it, see section 5. Published documents you have not changed are not listed; open the note to see its status. |
+| **Not accepted** | The reviewer closed it without publishing. | Make the changes asked for and press **Submit again**. Use **Open in GitLab** on its row to read why. |
 
-Other markers you may see:
+Other markers:
 
-- **Unsent edits** — you changed the note since you last sent it. Press
-  **Send update** (or **Submit a new version**) when you are ready.
-- **In another project** — the document belongs to a different project than
-  the one in your settings. Check your **Project ID** before submitting.
+- **Unsent edits** — you changed the note since you last sent it. It is shown
+  beside the status, not instead of it. Press **Send update** (or **Submit a
+  new version**) when you are ready.
+- **Moved** — the note is not where the document is on the project: you moved
+  or renamed it. It is shown beside the status. Press **Submit** to move the
+  document there too (see section 3). **Get updates** does not bring the old
+  copy back while the moved note is in your vault unchanged.
+- **No status at all** — the plugin has not checked this document yet, or the
+  check failed. Press **Refresh**.
 
-**Send update** (Waiting for review or Changes requested). Sends your latest
-version to the same review. You see "Your update was sent. Refresh to see where
-the review stands." The status does not change by itself: a document stays
-**Changes requested** until the reviewer's comments are resolved in GitLab.
+**Open in GitLab** on a row opens the review while the document is waiting,
+and the document's page once it is published.
+
+**Refresh.** The panel checks for changes when it opens and when you press
+**Refresh** — never on its own, and never while you type. While it works, the
+button reads **Checking…**. If a check fails, the panel keeps the last known
+statuses and says "Could not check your documents' status just now. They may
+have changed since this was last updated."
+
+Under the list the panel says how many updates are waiting: "You have the
+latest documents." or, for example, "3 updates available". See section 6.
+
+## 5. Sending changes, and starting again
+
+**Send update** (Waiting for review). Sends your latest version to the same
+review, on top of anything a reviewer added. You see "Your update was sent."
 
 **Revising a published document.** Open the note, make your changes, and press
-**Submit a new version**. The form shows the title, category and location
-(read-only). Press **Submit**. A new review starts and the status becomes
-**Waiting for review**. Published documents you have not changed are not
-listed in the panel; open the note to see its status.
+**Submit a new version**. A new review starts and the status becomes **Waiting
+for review**.
 
 **Resubmitting after Not accepted.** Make the changes the reviewer asked for,
 then press **Submit again**. A new review starts.
 
-**Refresh.** The panel checks for status changes when it opens and when you
-press **Refresh** — never on its own. While it works, the button reads
-**Checking…**. If a check fails, the panel keeps the last known statuses and
-says "Could not check your documents' status just now. They may have changed
-since this was last updated."
+**If a reviewer changed the document.** A reviewer can add their own edits to a
+document under review. If they did, the next **Send update** is stopped with
+"The version under review has changes that aren't in your note. Use Reset to
+bring them in, then make your edits again." Nothing is sent and nothing is lost.
 
-## 6. Reset, Restore and Import
+**Reset** throws away your changes to a document under review and brings in the
+version the reviewers have. It is a button beside **Send update**, shown with
+the note open and only while the document is Waiting for review. Pressing it
+asks first: "Reset this document? … will be replaced with the version currently
+under review. Anything you have changed in this note since you last sent it will
+be lost." Press **Cancel** to keep your note, or **Reset** to replace it. When
+done you see "This note now matches the version under review." After a Reset
+you can edit the note and send an update as normal.
 
-| Use | When | Where |
-|---|---|---|
-| **Reset** | You want to throw away your changes to a document under review and go back to the version the reviewer has. | Button beside **Send update**, with the note open. Only shown while the document is Waiting for review or Changes requested. |
-| **Restore** | You deleted a note while it was still under review. | **Documents you can restore** — "Documents still in review that this vault no longer has a note for." |
-| **Import all** | You want documents that are already published but not in your vault (new laptop, new colleague's work). | **Documents you can import** — "Documents on the platform that this vault has no copy of." |
+If the review has finished since you last looked, Reset does nothing and says
+"This document's review has already finished, so nothing was reset. Get updates
+to see where it stands now."
 
-**Reset overwrites your note.** Pressing **Reset** asks first: "Reset this
-document? … will be replaced with the version currently under review. Anything
-you have changed in this note since you last sent it will be lost." Press
-**Cancel** to keep your note, or **Reset** to replace it. When done you see
-"This note now matches the version under review."
+## 6. Get updates
 
-**Restore** puts the note back where it was. You see "This document is back in
-your vault."
+**Get updates** brings the whole project's documents into your vault: new
+documents are added, and documents someone else changed are updated. It only
+ever brings changes **down**; it never sends anything.
 
-**Import all** brings in every document in the list, each at its own
-location, and marks it **Published**. You see how many were imported. Any
-document that could not be imported stays in the list with the reason under
-it — usually a name problem (see [Filename rules](#filename-rules)). If the
-list says it is incomplete, there were more documents than could be listed at
-once.
+Before it changes anything, the first time it shows a summary: "*N* to
+download, *N* to update, *N* need your decision. Nothing changes until you
+confirm."
+
+- A document you have not touched is simply updated.
+- A document you changed and nobody else did is left alone.
+- A document you **and** someone else changed in different places is combined,
+  and you see "Merged your changes with GitLab's in *name*."
+- A document you and someone else changed in the **same** place asks you, in
+  plain words: "You and someone else both changed this document. Choose which
+  one to keep." You pick **Keep mine**, **Use theirs** or **Keep both** (which
+  saves the other version beside it). Nothing you wrote is deleted without your
+  choice.
+- If you removed a document that someone else then changed (or the other way
+  round), you are asked: **Remove it**, **Keep it removed**, **Get it back**.
+- A note with unsaved changes in the editor is left as it is, and you are told
+  to save it and get updates again.
+- If one file cannot be saved on your computer, the rest are still updated, and
+  you are told which one.
+
+You see "You already have the latest documents." when there is nothing to get,
+or "Got the latest documents: *N* added, *N* updated, *N* removed." afterwards.
 
 ## 7. Troubleshooting
 
 | You see | What it means | What to do |
 |---|---|---|
-| "Your access token has expired or is incorrect. Check you pasted all of it, or create a new one in GitLab." | Your token has expired, was pasted wrongly, or was revoked. | Paste the token again and press **Test connection**. If it still fails, create a new token (section 2). |
-| "Your access token doesn't have permission to … (missing: *name*). Create a new access token that includes it." | Your token is missing the permission named in brackets. | A token's permissions can't be changed after it is created, so create a new token that includes it (section 2) — compare with the list in the plugin's settings — and paste the new one in. |
-| "Could not reach GitLab at that address. Check the address above and your connection, then try again." | The address is wrong, or you are offline / off the network. | Check the **GitLab address** and your connection. GitLab can only be reached from the company network — in the office or on the VPN. You can keep writing and saving documents anywhere; submit them once you're connected. |
-| "Submit didn't go through. Check your connection and submit again." | The submit did not complete. | Check your connection and submit again. It is safe to retry. |
-| "Someone else changed this document while you were working on it. Open it in GitLab to see their changes, then submit again." | Someone edited the document under review directly in GitLab. Nothing of yours was sent. | Open it in GitLab to see their changes. To keep both, copy your changes somewhere, press **Reset** to take their version, add your changes back, then **Send update**. |
-| "Test your connection in the plugin's settings before creating a document." / "Add your GitLab details in the plugin's settings first." | You are not connected in this session. | Section 3. |
-| "This note's title or category is missing or not one of the nine categories. Fill it in on the note, then submit again." | The `title` or `category` property was removed or mistyped. | Fix it in the note's properties. The category must match one of the nine exactly. |
-| "Another note in this vault is the same document: …" | You duplicated a note, so two notes claim to be one document. | Delete the copy, or clear its document ID, then submit again. |
+| "Git isn't installed on this computer. Install it, then check again." | Git is missing. | Section 1. |
+| "That address isn't one Docs Publisher can use. Paste the SSH address from GitLab's Clone button — it starts with git@ or ssh://." | The address was mistyped, or is not a project address. | Copy it again from the **Clone** button. |
+| "GitLab doesn't recognise this key yet. Add it on GitLab's SSH keys page, then test again." | The key is not on your GitLab account. | Step 3: **Copy key**, **Open GitLab**, add it, **Test**. |
+| "This key is protected by a password, which Docs Publisher can't type for you. Create a new key for Docs Publisher." | The key has a password. | Press **Create key**. |
+| "Docs Publisher can't read this key, so it can't use it. Create a new key for Docs Publisher instead." | The key file is damaged or unreadable. | Press **Create key**. |
+| "There is already a file named docs-publisher_ed25519 in your .ssh folder that Docs Publisher can't use. Rename or move it, then press Create key again." | An unusable file is in the way of the new key. | Rename or move that file, then press **Create key**. |
+| "GitLab's identity has changed since you last connected. Ask your admin before continuing." | The server's identity is not the one this computer remembers. | Ask your admin. Do not continue until they confirm. |
+| "Could not reach GitLab at that address. Check the address and your connection, then try again." | The address is wrong, or you are offline. | Check the address and your connection. GitLab may only be reachable from the company network — in the office or on the VPN. You can keep writing; send when connected. |
+| "That project could not be found, or your access does not include it. Check the address in settings." | Wrong address, or your account cannot see the project. | Check the address; ask your admin for access. |
+| "A setting on this computer sends this address somewhere else, so Docs Publisher stopped. Ask whoever set up Git on this computer to remove it." | A Git setting rewrites the project's address. | Ask whoever looks after your computer. |
+| "Submit didn't go through. Check your connection and submit again." | The send did not complete. | Check your connection and send again. It is safe to retry. |
+| "GitLab did not accept this document. Your account may not be allowed to add documents to this project. Ask your admin for Developer access." | Your account cannot add to the project. | Ask your admin. |
+| "Someone changed this document on GitLab while you were sending it. Get updates, then send again." | It changed between your check and your send. Nothing was sent. | Get updates, then send again. |
+| "Someone changed this document on GitLab since you last got updates. Get updates, then send again." | The published version is newer than the one you started from. Nothing was sent. | Get updates, then send again. |
+| "A document already exists at this path on GitLab that you haven't downloaded yet. Get updates first, then try again." | Someone published at this path since you last got updates. | Get updates. |
+| "Another document in the project already has this file name, so this one can't be sent. Rename this file and try again." | Two documents cannot share a file name. | Rename the file. |
+| "There is nothing new to send: this document already matches the version on GitLab." | Your note equals the published one. | Make a change first. |
+| "This note's identity isn't valid, so it can't be sent. Remove the doc_id line from the note's properties and submit again." | An older version of the plugin wrote a document ID into this note and it is damaged. | Remove the `doc_id` property and send again. |
+| "This note's title or category is missing or not one of the nine categories. Fill it in on the note, then submit again." | A property was removed or mistyped. | Fix it in the note's properties. |
+| "Another note in this vault is the same document: …" | You duplicated a note, so two notes claim to be one document. | Delete the copy, or clear its document ID. |
+| A note you deleted is back after **Get updates**. | **Get updates** makes your vault match the project, so a note the project still has and your vault lacks is brought back. | To stop receiving it, ask the project's owner to remove it from the project. |
+| "Finish the setup steps in the Docs Publisher panel first." | A step in section 2 is not done. | Open the panel and follow it. |
+| "Docs Publisher is still checking your setup. Try again in a moment." | The plugin has only just started. | Wait a few seconds. |
+| "The Obsidian Git plugin is also turned on for this vault. It can send changes on its own and clash with Docs Publisher. Turn one of them off." | Two tools are managing the same vault. | Turn one off. Docs Publisher is not blocked. |
+| "The check did not succeed. Check your setup and try again." | Something unexpected. | Press **Check again**; if it repeats, tell whoever looks after the plugin. |
 
-### Filename rules
+## 8. Filename rules
 
-A document's filename is its permanent identity, so:
+A document's filename is what its identity is made from when it is first sent, so:
 
 - **It must be unique across the whole project**, not just within its folder.
   Two documents called `README` in different folders cannot both be
   published. Use your team's naming convention (for example
   `BOA-SOP-001_Update-Device-Details`) and you will not hit this.
-- **No spaces**, and none of `~ ^ : ? * [ \`. It may not start with `.` or end
-  with `.lock`. Parentheses, `&`, `#`, `-` and `_` are fine.
+- **No spaces**, and none of `~ ^ : ? * [ \`. It may not start with `.` or `-`,
+  contain `..`, or end with `.lock`. Parentheses, `&`, `#`, `-` and `_` are fine.
 - Vietnamese letters are fine: `HD-001_Cài-đặt` is accepted. But accents are
   ignored when comparing names, so `Cài-đặt` and `Cai-dat` count as the
   **same** name.
+- Names that differ only in capitals (`Notes.md` and `notes.md`) are one file
+  on Windows and macOS, so avoid them.
 
-Messages you may see:
-
-- "This file's name can't be used as a document ID. Rename it — no spaces and
-  none of ~^:?*[\ — then submit again."
-- "A document with this file name is already waiting for review. If that's this
-  document, there's nothing more to do. If it's a different one, rename the
-  file and submit again."
-- "A document already exists at this location. Rename this note to publish it
-  separately, or delete it and import the existing one instead."
-
-Rename only **before the first submit**. After that, see the warning in
-section 4.
+Choose the name **before the first send**. You can rename or move the note
+afterwards (see section 3), and the document keeps its identity; but a note you
+rename **and** edit before sending is treated as a new note, and its new name
+must follow these rules.
 
 ---
 
-## 8. For admins and reviewers
+## 9. For admins and reviewers
 
 This section uses git vocabulary.
 
-**Roles.** An author needs **Developer** on the project. Developer is the
-floor for submitting: a submit is a push to a non-protected branch plus a merge
-request. Planner and Reporter connect but are read-only (the panel says so and
-asks for Developer access); Guest and below see nothing. A role is a
-prediction, not proof — a Developer whose token lacks a permission still fails,
-with a message naming it. See `docs/gitlab-roles.md`.
+**How the plugin works.** There is no token and no API call. The plugin runs the
+`git` and `ssh` programs on the author's computer, over SSH, with the author's
+own key. The vault itself becomes a git repository (a `.git` folder inside it);
+`.obsidian/` and `.trash/` are excluded through `.git/info/exclude`, never a
+committed ignore file. It never runs `checkout`, `merge`, `pull`, `rebase` or
+anything else that writes the working tree: files in the vault are written only
+by the plugin's own code, through Obsidian.
 
-**Token permissions.** Fine-grained personal access token, one per author
-(never a shared or project token — the merge request author must be the real
-person). Exactly these, as shown in the settings tab:
+**Requirements.** Git (and OpenSSH, which Git for Windows includes) on the
+author's computer; each author needs an account with an SSH key and
+**Developer** access on the project.
 
-- Group and project — Project (Read), Repository (Read), Branch (Read, Delete),
-  Commit (Create), Merge Request (Read, Create)
-- User — User (Read). On the separate User tab; missing it fails Test
-  connection at the first step.
+**Why Developer is safe.** An author's key can push to `doc/<doc_id>` branches
+and open merge requests. It cannot publish: keep the **default branch
+protected** so only reviewers can merge. The plugin only ever pushes to
+`doc/<doc_id>` and never to the default branch. The dedicated key it creates
+has no passphrase, because the plugin cannot type one; that is bounded by the
+protected branch, and an author can remove a copied key in GitLab at any time.
 
-Authors do not need Merge Request: Merge.
-
-**Expiry and renewal.** Each author creates their own token with a one-year
-expiry; there is no central rotation. When a token expires, every call fails
-with 401 and the plugin shows the author "Your access token has expired or
-is incorrect. Check you pasted all of it, or create a new one in GitLab."
-with a link to its settings; the author creates a new token
-(section 2). Permissions can't be edited on an existing token, so a missing
-permission also means a new token. To cut off someone who leaves, remove them
-from the project — their token loses access with it.
-
-**What the plugin does in GitLab.** Each document gets branch
-`doc/<doc_id>` (the filename, frozen at first submit) and one merge request
-into `main`. **Reviewing and merging happen in GitLab itself — the plugin has
-no merge action in v1.** How your actions show up to the author:
+**What the plugin does in GitLab.** Each document gets branch `doc/<doc_id>`
+(the filename, frozen at first send) and, from push options, one merge request
+into the default branch, with the title the author gave and "delete source
+branch" ticked. **Reviewing and merging happen in GitLab itself — the plugin has
+no merge action.** How your actions show up to the author:
 
 | In GitLab | Author sees |
 |---|---|
-| Open MR, no unresolved threads | Waiting for review |
-| Open MR with unresolved threads | Changes requested (back to Waiting for review once threads are resolved and they Refresh) |
-| Merged | Published |
-| Closed without merge | Not accepted. This is terminal: "Submit again" cuts a fresh branch from `main`, and the plugin deletes the abandoned branch itself (hence Branch: Delete). |
+| Open merge request | Waiting for review |
+| Merged (any method, branch kept or removed) | Published |
+| Closed without merge, branch removed | Not accepted. Terminal: "Submit again" starts a fresh branch from the default branch. |
+| Closed without merge, branch left | Still Waiting for review (the plugin has no API to see closed requests; delete the branch). |
 
-Do not push commits to a `doc/*` branch yourself — the author's next update is
-refused ("Someone else changed this document…") and they must reconcile by
-hand. Comment instead. On CE, required approvals do not exist; the protected
-`main` branch's "Allowed to merge" setting is the only gate on publishing.
+"Changes requested" no longer exists as a status, because it needs the
+platform's API. Reviewers' comments reach the author through GitLab's own
+notifications.
 
-**Project setup.** The project must have at least one file (a README will do);
-an empty project fails every submit with "This project has no files yet…".
-Document filenames must be unique repository-wide and ref-legal
-(`docs/document-naming.md`). A `README.md` or `_placeholder.md` that carries
-YAML front matter is offered for import as if it were a document — remove the
-front matter.
+**Pushing to a `doc/*` branch yourself** is fine. The author's next update is
+stopped with "The version under review has changes that aren't in your note…" if
+you changed a file they are sending, and they bring your change in with Reset.
+A commit that touches only other files does not stop them.
+
+**Project setup.** The project must have at least one commit. Document filenames
+must be unique repository-wide and ref-legal (`docs/document-naming.md`). The
+server must accept push options (`receive.advertisePushOptions`); if it does
+not, documents are still sent, and the author is shown "Open to request review".
 
 **Plugin data.** The plugin stores `data.json` in
-`<vault>/.obsidian/plugins/obsidian-docs-publisher/`. It holds each document's
-tracking record and the remembered GitLab address and project ID. **It never
-contains the access token** — the token is held in memory only.
+`<vault>/.obsidian/plugins/obsidian-docs-publisher/`. It holds the project
+address, the path of the author's key, their username, and what the last test
+covered. **It never contains a key or a password.** Settings left by an earlier
+version of the plugin (its records, its saved connection) are ignored and left in
+the file, so that version can be reinstalled. Nothing in it is irreplaceable: the
+address is also in `.git/config`, and the name and email are git settings.
 
-- **Back it up.** Submitted documents recover their status from GitLab on
-  Refresh, but imported documents' Published status exists only in this file;
-  lose it and they all read "Not submitted yet".
 - **Never commit it** to any repository.
 - Reinstalling or updating: replace `main.js`, `manifest.json` and
-  `styles.css` only; leave `data.json` in place.
+  `styles.css` only; leave `data.json` in place. `install.sh` does exactly this.
+
+**Where to read more.** `docs/ssh-setup.md` (keys, security trade-offs, what
+has been checked on Windows), `docs/ce-verification.md` §F (what has not yet
+been confirmed on the target GitLab), and `docs/document-naming.md`.

@@ -1,11 +1,26 @@
 import { Notice } from 'obsidian';
+import { AUTHOR_MESSAGES } from './author-messages';
 
 /**
- * The four actions that write: to the remote, to the vault, or to both.
- * Refresh is not one of them — it has its own busy state and is not
- * coordinated with these (add-action-busy-states, Deferred).
+ * The actions that write, or that wait on something that does: to the remote,
+ * to the vault, or to both. Refresh is not one of them — it has its own busy
+ * state, but it does yield to these (replace-rest-with-local-git-ssh,
+ * plugin-shell "The panel's write actions show when they are working and run
+ * one at a time"): a fetch must not start under an update that is comparing
+ * against the version it is about to replace.
+ *
+ * `restore` and `import` are the REST-era actions and go with their code (task
+ * 5.1); the other four are the actions this change adds or renames.
  */
-export type WriteAction = 'submit' | 'reset' | 'restore' | 'import';
+export type WriteAction =
+	| 'submit'
+	| 'reset'
+	| 'restore'
+	| 'import'
+	| 'update'
+	| 'connect'
+	| 'test'
+	| 'createKey';
 
 /**
  * Which write is running, and on what: the note's path for submit and reset,
@@ -19,7 +34,7 @@ export type RunningAction = { action: WriteAction; target: string };
  * "conflict", or "main". It names no action, because the refused press may
  * not be the one still running and the author does not need to know which.
  */
-export const BUSY_MESSAGE = 'Still finishing your last action. Try again in a moment.';
+export const BUSY_MESSAGE = AUTHOR_MESSAGES.stillBusy;
 
 type Listener = () => void;
 
@@ -63,8 +78,12 @@ class ActionSlot {
 			return;
 		}
 
-		this.set({ action, target });
+		this.running = { action, target };
 		try {
+			// Told inside the `try`: a listener that throws while the slot is being
+			// taken must still hand it back, or every control stays busy until the
+			// plugin reloads.
+			this.notify();
 			await work();
 		} finally {
 			this.set(null);
@@ -81,6 +100,10 @@ class ActionSlot {
 
 	private set(running: RunningAction | null): void {
 		this.running = running;
+		this.notify();
+	}
+
+	private notify(): void {
 		// Copy first: a listener may unsubscribe itself while being notified.
 		for (const listener of [...this.listeners]) {
 			listener();

@@ -19,5 +19,10 @@ export default defineConfig({
 	},
 	test: {
 		include: ['tests/**/*.test.ts'],
+		// Many tests drive real git against a stand-in server, and a connect is
+		// a dozen processes; five seconds is too tight when the files run in
+		// parallel on a busy machine.
+		testTimeout: 30_000,
+		hookTimeout: 30_000,
 	},
 });

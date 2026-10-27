@@ -2,446 +2,139 @@
 
 ## Purpose
 
-This capability defines how the plugin tracks a document's review state
-locally once it has been submitted: what is persisted, how a record is keyed
-so it survives a rename, how that state is reconciled against the remote,
-and the author-facing label shown for each state. It does not write into a
-document's front matter and does not talk to the remote platform itself.
+This capability derives a document's state from the local copy of the project and never stores it: whether a review is open (pending), the document is on the default branch (published), or its review ended without being accepted (closed). It matches a note to its document by path and exact content, with a `doc_id` in the note read only as an alias, and works out whether a note has been edited since it was last sent, so the panel can draw without starting a process or reaching the network.
 
 ## Requirements
-
-### Requirement: A submitted document's state is persisted locally, keyed by its frozen identity
-This capability SHALL persist one record per submitted document in the
-plugin's local data, keyed by that document's `doc_id`. It SHALL NOT key a
-record by the document's file path, since a document's path may change after
-its first submit while `doc_id` does not. A record created by a successful
-submission SHALL also carry that document's remote path as it was at the
-moment of that submission, captured going forward from this capability's
-recovery support; a record created before this capability existed carries no
-such path.
-
-#### Scenario: A record is created on first successful submission
-- **WHEN** a document is submitted for the first time and both the remote write and the merge request creation succeed
-- **THEN** a record is persisted keyed by that document's `doc_id`, carrying the path the document was submitted at
-
-#### Scenario: Resolving a note to its record after a rename
-- **WHEN** the author opens a previously submitted note whose file has since been renamed
-- **THEN** the plugin resolves the note's tracking record by reading `doc_id` from the note's own front matter, not by the note's current or original file path
-
-#### Scenario: A record predating this capability carries no path
-- **WHEN** a record was persisted before this capability existed
-- **THEN** it carries no path, and this capability's recovery support falls back to the merge-request-based path lookup rather than treating the absence as an error
-
-### Requirement: A document whose local note is gone can be recovered when its content is still reachable
-This capability SHALL identify, for every persisted record whose `doc_id`
-matches no note currently in the vault, whether that document's content can
-be located on the remote — either from a path stored in the record itself or
-from the single path its still-open merge request's commit touched — and
-SHALL NOT report a document as recoverable when neither source yields a
-single, unambiguous path.
-
-#### Scenario: A record with a stored path
-- **WHEN** an orphaned record carries a stored path
-- **THEN** that document is reported as recoverable from that path
-
-#### Scenario: A record with no stored path but an open merge request touching one file
-- **WHEN** an orphaned record carries no stored path, and the remote's merge request for its branch is open and its commit changed exactly one file
-- **THEN** that document is reported as recoverable from that file's path
-
-#### Scenario: A record with no stored path and no open merge request
-- **WHEN** an orphaned record carries no stored path and its branch has no open merge request
-- **THEN** that document is reported as NOT recoverable, distinct from a document whose recovery has not yet been attempted
-
-#### Scenario: A record whose merge request touched more than one file
-- **WHEN** an orphaned record carries no stored path and its open merge request's commit changed more than one file
-- **THEN** that document is reported as NOT recoverable rather than resolved to a guessed path
-
-### Requirement: A recorded submission whose note is gone can be located wherever its content still is
-This capability SHALL resolve a stored submission whose note has left the
-vault to the place its content can still be read from, trying in turn: the
-path the record itself captured, the path its still-open review reports, and
-— when neither answers — the document's own file on the default branch,
-identified by matching the record's identity against the files the repository
-holds.
-
-A document SHALL be reported as unlocatable only when none of those three
-answers it. Reporting one unlocatable while its file sits on the default
-branch tells the author something false, and told it for every document whose
-review had been merged — which is the ordinary end state of a published
-document.
-
-The match against the repository SHALL be by the document's identity derived
-from each file's name, by the same derivation used when a document is
-imported, and SHALL NOT construct a path. Where more than one file derives
-the same identity, the capability SHALL decline rather than choose.
-
-A repository listing that reports itself incomplete SHALL NOT be resolved
-from: a document missing from a partial listing is indistinguishable from one
-that is not there.
-
-#### Scenario: A published document whose review was merged
-- **WHEN** a recorded submission's note is gone, its review has been merged, and its file is on the default branch
-- **THEN** it is resolved as recoverable from that file
-
-#### Scenario: A record whose document is nowhere
-- **WHEN** a recorded submission's note is gone and no file on the default branch is that document
-- **THEN** it is reported as unlocatable
-
-#### Scenario: Two files claim the same identity
-- **WHEN** more than one file on the default branch derives the identity a recorded submission carries
-- **THEN** it is reported as unlocatable rather than resolved to either of them
-
-#### Scenario: Every record carries its own path
-- **WHEN** every recorded submission already captured the path it was submitted from
-- **THEN** the repository listing is never read
-
-### Requirement: Recovery never guesses at a document's remote path
-This capability SHALL treat a document's remote path as either known (from a
-stored value or from an unambiguous single-file merge request) or unknown,
-and SHALL NOT infer, construct, or approximate a path from a `doc_id` or
-from any other value.
-
-#### Scenario: No inference from `doc_id` alone
-- **WHEN** a record's path is unknown by the rule above
-- **THEN** this capability does not construct a path from that record's `doc_id` or offer one as a fallback
-
-### Requirement: Submission state lives only in plugin data, never in the note's front matter
+### Requirement: Submission state is derived and never written into the note's front matter
 This capability SHALL NOT write any submission-state value into a document's
-front matter. Submission state SHALL be readable only from the plugin's own
-persisted data.
+front matter, and SHALL NOT persist submission state anywhere. A document's
+state SHALL be readable only by deriving it from the fetched copy of the
+project and the vault's own files, as defined by "A document's state is derived
+from the fetched copy".
 
 #### Scenario: A note's front matter carries no submission state
-- **WHEN** a document has been submitted and its tracking record shows a pending state
+- **WHEN** a document has been submitted and is waiting for review
 - **THEN** the note's front matter contains no field describing that state
 
-### Requirement: A pending record reflects a document awaiting first review
-A record created by a first successful submission SHALL carry the pending
-state, and no other state SHALL be reachable through this capability's first
-submission path.
-
-#### Scenario: State immediately after a successful first submission
-- **WHEN** a document's first submission completes successfully
-- **THEN** its tracking record's state is pending
-
-### Requirement: A document's state is resolved from the remote, not from what was last stored
-This capability SHALL determine a document's current state by matching its
-frozen `doc_id` against the remote's merge requests, and SHALL treat its own
-persisted records as a cache of that answer rather than as the answer. Where
-a stored record disagrees with the remote, the remote SHALL win.
-
-Reconciliation SHALL cover every document this capability holds a record for,
-whether or not a note for it exists in the vault. A record whose note has been
-deleted is the case that most needs correcting — nothing else in the vault
-describes that document — and it is the case a vault-driven scope silently
-omits.
-
-A record SHALL NOT be able to hold a state the remote has moved past
-indefinitely. Any surface that decides what to offer an author from a stored
-state depends on this: a state that is never re-asked is not a cache, and
-treating it as one offers actions against a situation that has ended.
-
-#### Scenario: A stored state that the remote has moved past
-- **WHEN** a document's stored record says it is awaiting review and the remote shows its merge request has been merged
-- **THEN** the document resolves as published, and the stored record is updated to match
-
-#### Scenario: A note with no stored record at all
-- **WHEN** a note carrying `doc_id` in its front matter is resolved on a machine whose plugin data holds no record for it
-- **THEN** the document's state is resolved from the remote exactly as it would be with a record present, and a record is created from that answer
-
-#### Scenario: A stored record whose note is no longer in the vault
-- **WHEN** a refresh runs and a stored record's `doc_id` matches no note in the vault
-- **THEN** that document is reconciled against the remote like any other, and its stored state is corrected if the remote has moved past it
-
-#### Scenario: A document whose review ended while its note was absent
-- **WHEN** a document's note was deleted while it was awaiting review, and its merge request is afterwards merged
-- **THEN** the next refresh resolves it as published, so no surface continues to offer it as a document still under review
-
-#### Scenario: An orphaned record for a document the remote no longer has
-- **WHEN** a stored record's `doc_id` matches no merge request on the remote
-- **THEN** it resolves to no state, exactly as a note in the same position would, and is not presented as though its state were known
-
-### Requirement: Reconciliation matches a document by its frozen identity, in a fixed precedence
-This capability SHALL reconcile a document by matching `doc/<doc_id>` against
-the source branch of the remote's merge requests, considering all states,
-most recent first, and SHALL resolve the result in this order:
-
-1. An open merge request wins if one exists.
-2. Otherwise the most recent merge request decides: merged resolves as
-   published, closed without merging resolves as not accepted.
-3. No merge request at all resolves as never submitted.
-
-Where a note carrying `doc_id` exists, it SHALL match by the `doc_id` read
-from the note's own front matter, never by the note's file path and never by
-a stored record. Where a stored record has no note in the vault, it SHALL
-match by the record's own `doc_id`, which was frozen when the record was
-written; that is the only identity such a document still has.
-
-#### Scenario: An open merge request takes precedence over older ones
-- **WHEN** a document has one open merge request and two older merged ones
-- **THEN** it resolves from the open merge request, not from the most recent merged one
-
-#### Scenario: A document whose review was closed without merging
-- **WHEN** a document's only merge requests were closed without merging
-- **THEN** it resolves as not accepted, and not as never submitted
-
-#### Scenario: A document that has been published and not since revised
-- **WHEN** a document's most recent merge request was merged and no open one exists
-- **THEN** it resolves as published
-
-#### Scenario: A note whose file has been renamed since it was submitted
-- **WHEN** a note carrying `doc_id` is reconciled after its filename has been changed
-- **THEN** it resolves through the `doc_id` in its front matter, and the current filename is not used for matching
-
-#### Scenario: A note with no matching merge request
-- **WHEN** a note carrying `doc_id` is reconciled and the remote holds no merge request for it
-- **THEN** it resolves as never submitted
-
-#### Scenario: A stored record whose note is absent
-- **WHEN** a stored record is reconciled and no note in the vault carries its `doc_id`
-- **THEN** it is matched by the `doc_id` held in the record, under the same precedence as any other document
-
-### Requirement: Reconciliation reads the remote once for all documents
-This capability SHALL reconcile every known document against a single
-listing of the remote's merge requests, matching locally. It SHALL NOT make
-one request per document.
-
-Widening reconciliation's scope to include records without notes SHALL NOT
-change this: those documents are matched against the same single listing, so
-the cost of covering them is bounded by what is already being read.
-
-#### Scenario: Reconciling many documents
-- **WHEN** reconciliation runs for a vault holding twenty submitted documents
-- **THEN** the remote is listed once and all twenty are matched against that one result
-
-#### Scenario: Reconciling documents with and without notes together
-- **WHEN** reconciliation runs for a vault holding some documents with notes and some stored records without them
-- **THEN** all of them are matched against one listing of the remote, not one request per record
-
-#### Scenario: A reconciliation that cannot complete
-- **WHEN** the listing does not succeed
-- **THEN** no document's stored state is changed, and the caller is told the reconciliation failed rather than receiving states resolved from partial data
-
-### Requirement: Correcting a record's state never discards what only a submit establishes
-When reconciliation updates a stored record, it SHALL correct the fields the
-remote is authoritative for — the document's state, its merge request and its
-branch — and SHALL carry forward the fields only a successful submit or import
-establishes, specifically the document's remote path and its edit baseline.
-
-This holds for a record whose note is absent exactly as for one whose note is
-present. The remote path is what a later restore uses to put the note back, so
-discarding it while correcting a state would break recovery in the course of
-fixing a listing.
-
-#### Scenario: A record's state is corrected
-- **WHEN** reconciliation finds a stored record's state is out of date
-- **THEN** the state, merge request and branch are updated, and the stored remote path and edit baseline are left as they were
-
-#### Scenario: An orphaned record is corrected
-- **WHEN** reconciliation corrects a record whose note is no longer in the vault
-- **THEN** its remote path survives the correction, so the document can still be restored to where it came from
-
-### Requirement: An open document with unresolved review threads is in changes-requested
-This capability SHALL resolve a document with an open merge request as
-changes-requested when that merge request carries unresolved review threads,
-and as awaiting review when it does not. Resolving threads SHALL return the
-document to awaiting review.
-
-#### Scenario: A reviewer has left an unresolved thread
-- **WHEN** a document's open merge request carries at least one unresolved review thread
-- **THEN** the document resolves as changes-requested rather than awaiting review
-
-#### Scenario: The reviewer resolves their threads
-- **WHEN** every thread on a document's open merge request has been resolved and the merge request is still open
-- **THEN** the document resolves as awaiting review again
-
-#### Scenario: An open merge request nobody has commented on
-- **WHEN** a document's open merge request carries no review comments
-- **THEN** the document resolves as awaiting review
+#### Scenario: Nothing is persisted
+- **WHEN** a document is submitted and Obsidian is then restarted
+- **THEN** the plugin's data file holds no record of that document, and its state is derived again from the fetched copy
 
 ### Requirement: Each submission state has a fixed author-facing label
-This capability SHALL define an author-facing label for each submission
-state it recognizes. The labels SHALL be: pending is "Waiting for review",
-changes-requested is "Changes requested", published is "Published", and
-closed is "Not accepted". No label SHALL use a git-vocabulary term or an
-internal state name.
-
-The closed state's label was previously "Closed", a placeholder recorded as
-provisional while that state was unreachable. It is now reachable and takes
-the author vocabulary the project settled on.
+This capability SHALL define an author-facing label for each submission state it
+recognizes. The labels SHALL be: pending is "Waiting for review", published is
+"Published", and closed is "Not accepted". No label SHALL use a git-vocabulary
+term or an internal state name. There is no "Changes requested" state: it cannot
+be derived without the platform's API and was removed on purpose. There is no
+"Not submitted yet" state either: a note carries a `doc_id` only after a
+successful send, so a note that has one has always been submitted.
 
 #### Scenario: Displaying a pending document's state
-- **WHEN** a surface displays the state of a document whose tracking record is pending
+- **WHEN** a surface displays the state of a document that is pending
 - **THEN** it displays the label "Waiting for review", not the internal state name and not any git-vocabulary term
 
-#### Scenario: Displaying a document whose review asked for changes
-- **WHEN** a surface displays the state of a document resolved as changes-requested
-- **THEN** it displays the label "Changes requested"
-
 #### Scenario: Displaying a published document
-- **WHEN** a surface displays the state of a document resolved as published
+- **WHEN** a surface displays the state of a document that is published
 - **THEN** it displays the label "Published"
 
 #### Scenario: Displaying a document whose review was closed without publishing
-- **WHEN** a surface displays the state of a document resolved as closed
+- **WHEN** a surface displays the state of a document that is closed
 - **THEN** it displays the label "Not accepted", and never "Closed"
 
-### Requirement: A single document's state can be resolved without a full reconciliation pass
-This capability SHALL provide a way to resolve one document's current state
-against the remote, filtered to that document's own tracked branch, without
-listing every merge request in the project. It SHALL apply the same state
-precedence a full reconciliation pass applies: an open merge request wins if
-one exists; otherwise the most recent merge request decides; no merge
-request at all resolves as never submitted.
-
-#### Scenario: Resolving one document queries only its own branch
-- **WHEN** a single document's state is resolved
-- **THEN** the remote is queried filtered to that document's own tracked branch, not listed unfiltered across the whole project
-
-#### Scenario: Single-document resolution agrees with a full reconciliation pass
-- **WHEN** a document's state is resolved individually and also resolved as part of a full reconciliation pass in the same moment
-- **THEN** both report the same state
-
-#### Scenario: A failed single-document resolution is not read as never-submitted
-- **WHEN** the filtered query does not succeed
-- **THEN** the caller receives a failure, and the document is not treated as though it had never been submitted
-
 ### Requirement: Resolving a document's remote path is unaffected by the files it embeds
-Every place this capability resolves a document's remote path from its
-merge request SHALL continue to resolve it once that merge request also
-carries the images the document embeds. A merge request carrying a document
+A document's remote path SHALL be found by its `doc_id`, never from the note's
+current path: when its document branch exists, the single markdown file that
+branch changed; otherwise the single path on the default branch whose file name
+derives that `doc_id` (unique by the project's naming rule); otherwise none, and
+more than one candidate counts as none. It SHALL continue to resolve once the
+branch also carries the images the document embeds. A branch carrying a document
 and its attachments SHALL NOT be treated as one whose path could not be
 determined.
 
-This binds three behaviours that already exist: the path-mismatch check
-that refuses a resubmit whose note has moved, Reset's read of the content
-under review, and recovery's fallback for a record with no stored path. All
-three read the same answer, and before this change all three lost it the
-moment a merge request carried more than one file.
+This binds the path-mismatch check that refuses a resubmit whose note has moved,
+Reset's read of the content under review, and the state derived for a note that
+was renamed or moved. All read the same answer. A moved note keeps its state; the
+mismatch is reported by the check, not by the note silently reading as a different
+document.
 
 #### Scenario: The path-mismatch check still binds for an illustrated document
-- **WHEN** a document whose merge request carries its note and two images is resubmitted from a note that has been moved to a different folder
+- **WHEN** a document whose branch carries its note and two images is resubmitted from a note that has been moved to a different folder
 - **THEN** the resubmit is refused and the author is told the path to restore, rather than the check being skipped because the path could not be determined
 
 #### Scenario: Reset still works for an illustrated document
-- **WHEN** the author resets a document under review whose merge request carries its note and an image
-- **THEN** the note's content is restored from the remote, rather than the reset failing because the path could not be determined
+- **WHEN** the author resets a document under review whose branch carries its note and an image
+- **THEN** the note's content is restored from that branch, rather than the reset failing because the path could not be determined
 
-#### Scenario: Recovery's fallback still works for an illustrated document
-- **WHEN** a record with no stored path is resolved for recovery, and its open merge request carries the document and an image
-- **THEN** the document resolves as recoverable at its own path, rather than as unrecoverable
+#### Scenario: A published note that was moved
+- **WHEN** the author moves a published note to another folder
+- **THEN** the note still derives as published (its path is found by identity on the default branch), and a resubmit is refused with the path to restore rather than a second copy being added
+
+#### Scenario: A pending note that was renamed
+- **WHEN** the author renames a note whose review is live
+- **THEN** it still derives as pending, and a resubmit is refused with the path to restore
+
+#### Scenario: Two files claim the identity
+- **WHEN** more than one path on the default branch has a file name that derives the document's identity and no branch exists
+- **THEN** the remote path is none and the document is closed, not guessed
 
 ### Requirement: A document under review can have its remote content read from its own branch
-This capability SHALL provide a way to read the content a document
-currently carries on its own tracked branch, answering three ways: the
-content was found, the path is absent on that branch, or the read did not
-succeed. It SHALL NOT fall back to the project's default branch on an
-absent answer.
+This capability SHALL provide a way to read the content a document currently
+carries on its own document branch, from the fetched copy, answering three
+ways: the content was found, the path is absent on that branch, or the read did
+not succeed. It SHALL NOT fall back to the default branch on an absent answer.
 
-The recovery read this mirrors does fall back, because a recovered
-document may have been published and had its branch deleted. A document
-being reset has an open review cycle by definition, so its branch exists;
-an absent answer there means the caller's understanding of the state is
-stale, not that the content lives somewhere else. Falling back would
-substitute content from a different cycle that the author never asked for.
+A document being reset has a live review by definition, so its branch exists; an
+absent answer there means the caller's understanding of the state is stale, not
+that the content lives somewhere else. Falling back would substitute content from
+a different cycle that the author never asked for.
 
-#### Scenario: The document's content is read from its tracked branch
-- **WHEN** the read is performed for a document whose tracked branch holds its file
+#### Scenario: The document's content is read from its branch
+- **WHEN** the read is performed for a document whose branch holds its file
 - **THEN** the caller receives that file's content as it stands on that branch
 
-#### Scenario: The path is absent on the tracked branch
-- **WHEN** the read is performed and the document's path does not exist on its tracked branch
-- **THEN** the caller receives the absent answer, and no read is attempted against the project's default branch
+#### Scenario: The path is absent on the branch
+- **WHEN** the read is performed and the document's path does not exist on its branch
+- **THEN** the caller receives the absent answer, and no read is attempted against the default branch
 
 #### Scenario: The read does not succeed
-- **WHEN** the read fails for any reason other than the path being explicitly reported absent
+- **WHEN** the read fails for any reason other than the path being explicitly absent
 - **THEN** the caller receives a read failure, and does NOT receive the absent answer
 
-### Requirement: Only a document with an open review cycle can be reset
-This capability SHALL report a document as resettable only when its
-resolved state is pending or changes-requested. A document resolved as
-published, not accepted, or never submitted SHALL NOT be reported as
-resettable, and a document whose state has not been resolved SHALL NOT be
-either.
+### Requirement: Only a document with a live review can be reset
+This capability SHALL report a document as resettable only when its derived
+state is pending. A document that is published or closed SHALL NOT be reported as
+resettable, and a document whose state has not been derived SHALL NOT be either.
 
-#### Scenario: A document awaiting review
-- **WHEN** a document's resolved state is pending or changes-requested
+#### Scenario: A document waiting for review
+- **WHEN** a document's derived state is pending
 - **THEN** it is reported as resettable
 
 #### Scenario: A document whose cycle is over
-- **WHEN** a document's resolved state is published or not accepted
+- **WHEN** a document's derived state is published or closed
 - **THEN** it is not reported as resettable
 
 #### Scenario: A document whose state is unknown
-- **WHEN** a document's state has not been resolved in this session
-- **THEN** it is not reported as resettable, rather than assumed to be in an open cycle
+- **WHEN** no fetch has completed
+- **THEN** no document is reported as resettable
 
-### Requirement: Documents the remote has and the vault does not can be resolved
-This capability SHALL resolve which documents exist on the remote's default
-branch that this vault holds no note for, by comparing remote paths against
-the paths of notes in the vault. The comparison SHALL be case-sensitive.
+### Requirement: The edit baseline describes what the document was last sent as
+A document SHALL be reported as edited when the note's current bytes equal none
+of the versions it can legitimately be at the document's remote path: the last
+synced version's, the fetched default branch's, the version this vault last sent
+for it, or its document branch's. The comparison SHALL be made by content
+identifier, with no line-ending or other filter. A note equal to any one of the
+four SHALL NOT be reported as edited: equal to the last synced version means it
+has only not yet received someone else's later change, and raising that as the
+author's work would list every document others touch; equal to the default
+branch means it is published; equal to the last sent or the branch's version
+means it is what was sent.
 
-The answer SHALL be built from the vault's own files, never from stored
-records. A stored record is not evidence that a file exists, and the question
-being asked is precisely which files do not.
+A document with no remote path (nothing is known to compare against) SHALL be
+reported as not edited. Absence means nothing has been established, and reporting
+an unestablished difference would raise every document at once.
 
-#### Scenario: A document only the remote has
-- **WHEN** the remote's default branch holds a markdown document at a path no note in the vault occupies
-- **THEN** that document is resolved as discoverable
-
-#### Scenario: A document the vault already holds
-- **WHEN** the remote's default branch holds a markdown document at a path a note in the vault already occupies
-- **THEN** that document is NOT resolved as discoverable
-
-#### Scenario: A document the vault holds at a different path
-- **WHEN** the vault holds a note carrying a document's `doc_id` but at a different path from the remote's
-- **THEN** the remote document is resolved as discoverable, and the collision is left to the import-time checks rather than being silently hidden
-
-#### Scenario: A document this vault has a record for but no note
-- **WHEN** the remote's default branch holds a document whose identity matches a submission this vault recorded, and no note for it remains
-- **THEN** it is NOT resolved as discoverable, because it is a document this vault already knows about and has its own way to restore
-
-#### Scenario: The listing was truncated
-- **WHEN** the remote listing this resolution is built from reports that it was truncated
-- **THEN** the resolution reports that it is incomplete rather than presenting its result as the full set of discoverable documents
-
-### Requirement: A remote file with no front matter is not a discoverable document
-This capability SHALL exclude from the discoverable set any markdown file
-that carries no YAML front matter block at all.
-
-It SHALL NOT exclude by filename, and SHALL NOT require the full front-matter
-contract. Requiring the contract would empty the list against a real corpus,
-whose documents carry what their authors wrote rather than what this plugin
-writes at creation and first submit.
-
-#### Scenario: A repository README
-- **WHEN** the remote holds a `README.md` with no front matter
-- **THEN** it is not offered as a discoverable document
-
-#### Scenario: A document carrying partial front matter
-- **WHEN** the remote holds a document whose front matter carries `title` and `owner` but neither `doc_id` nor `category` nor `lifecycle`
-- **THEN** it IS offered as a discoverable document, since the fields it lacks are the ones this plugin itself writes
-
-#### Scenario: A document named like a placeholder
-- **WHEN** the remote holds a file named `_placeholder.md` that carries a front matter block
-- **THEN** it is offered, because exclusion is decided by the absence of front matter and never by the filename
-
-### Requirement: The edit baseline describes what the plugin last wrote
-Every operation that writes a tracked note's content on the author's behalf
-SHALL record, against that document, a baseline describing the note as it
-stands after that write. A document whose note has not changed since the
-plugin last wrote it SHALL NOT be reported as edited.
-
-The baseline SHALL be captured from a source that reflects the completed
-write rather than from a cached view of the file, since a baseline sampled
-before the write lands is indistinguishable from a note the author has since
-edited.
-
-The baseline is a fact about the NOTE and not about the review. Recording it
-SHALL NOT change a document's state, its branch, or its remote path.
-
-A document with no baseline SHALL be reported as not edited. Absence means
-nothing has been established, and reporting an unestablished difference would
-raise every previously published document at once.
+Being edited is a fact about the NOTE and not about the review. It SHALL NOT
+change a document's state or its branch.
 
 #### Scenario: A note is submitted and not touched afterwards
 - **WHEN** a document is submitted and its note is not edited afterwards
@@ -452,81 +145,154 @@ raise every previously published document at once.
 - **THEN** the document is reported as edited
 
 #### Scenario: A note is reset to the version under review
-- **WHEN** a document under review is reset, so its note is replaced with the content that document carries on its own tracked branch
-- **THEN** the document is not reported as edited, because the note now matches what the plugin last wrote
+- **WHEN** a document under review is reset
+- **THEN** the document is not reported as edited, because the note now matches its branch
 
-#### Scenario: A note is edited after being reset
-- **WHEN** the author edits a note after resetting it
-- **THEN** the document is reported as edited again
-
-#### Scenario: A document imported from the platform
-- **WHEN** a document is imported and its note is not edited afterwards
+#### Scenario: A document received from the project
+- **WHEN** a document arrives by getting updates and its note is not edited afterwards
 - **THEN** the document is not reported as edited
 
-#### Scenario: A record written before baselines existed
-- **WHEN** a document's stored record carries no baseline
-- **THEN** the document is reported as not edited, rather than edited
+#### Scenario: Others changed a published document the note has not yet received
+- **WHEN** a note equals the last synced version of a published document and the project's version has since changed
+- **THEN** the document is not reported as edited, and it is not listed under "Needs you"
 
-### Requirement: A record says which project it belongs to
-A persisted record SHALL carry the project it was written against, identified
-by the platform's address together with that project's canonical numeric
-identifier. The address is part of the identity because the same namespace path
-on two instances is two unrelated projects. The canonical identifier is used
-rather than whatever the author typed, because the connection details accept
-either a numeric identifier or a namespace path, and the same project configured
-both ways SHALL NOT read as two.
+#### Scenario: The author's own revision was merged and the note is then edited
+- **WHEN** a revision the author sent is merged unchanged and the author edits the note afterwards
+- **THEN** the document is reported as edited, because the note equals none of the four versions
 
-A record whose project is NOT KNOWN SHALL NOT be treated as belonging to the
-configured project. Absence means nothing has been established, and assuming
-otherwise is the error this requirement exists to prevent.
+#### Scenario: The note's bytes equal what was pushed
+- **WHEN** a first submission succeeds and the note is written back
+- **THEN** the note's content identifier equals the pushed file's, and the document is not reported as edited
 
-A record SHALL be stamped with a project only when the remote has CONFIRMED the
-document lives there — that is, when reconciliation matches its `doc_id` to a
-merge request on the configured project. It SHALL NOT be stamped on the grounds
-that a project happens to be configured.
+#### Scenario: A document with no known remote path
+- **WHEN** a document's remote path cannot be found
+- **THEN** it is reported as not edited
 
-#### Scenario: A submission records where it was submitted
-- **WHEN** a document is submitted successfully
-- **THEN** its record carries the address and canonical identifier of the project it was submitted to
+### Requirement: A document's state is derived from the fetched copy
+This capability SHALL derive a document's state from the vault's own note and
+the fetched copy of the project, for a note carrying a `doc_id`, with `M` the
+fetched default branch, `B` the fetched branch `doc/<doc_id>`, and `P` the
+document's remote path (found by identity, per "Resolving a document's remote
+path is unaffected by the files it embeds"). A review is LIVE when `B` exists and
+at least one file `B` changed relative to its merge base with `M` differs from
+`M`'s copy of that file, or `M` lacks it. Counting every changed file and not only
+the note means a revision that changes only an image is still live, and a branch
+left behind after a merge — including a squash merge, whose commits are not
+ancestors of `M` but whose files equal `M`'s — is not live.
 
-#### Scenario: A record is stamped when the remote confirms it
-- **WHEN** reconciliation matches a record's `doc_id` to a merge request on the configured project, and that record carries no project yet
-- **THEN** the record is stamped with that project, because the match establishes that the document lives there
+- A live review: pending.
+- Not live, and `M` has a file at `P`: published.
+- Not live, and the document has no remote path: closed.
+- No fetch has completed: no state, and the document is treated as waiting on the author.
 
-#### Scenario: A record is not stamped merely because a project is configured
-- **WHEN** a record carries no project and reconciliation finds no merge request for its `doc_id` on the configured project
-- **THEN** the record is left unstamped, rather than being assumed to belong to the project currently configured
+A note carrying no `doc_id` SHALL have no state and SHALL NOT be listed. Nothing is
+stored, so the derived state is the only state.
 
-#### Scenario: The same project configured two ways
-- **WHEN** the connection details are changed from a project's numeric identifier to its namespace path, or the reverse, without changing which project is meant
-- **THEN** records stamped with that project still match, because both forms resolve to the same canonical identifier
+#### Scenario: A document with a live review
+- **WHEN** the document branch exists and changed the document's file in a way the default branch does not have
+- **THEN** the document is pending
 
-#### Scenario: The same path on a different platform
-- **WHEN** records were written against a project path on one platform address, and the plugin is pointed at the same path on a different address
-- **THEN** those records do not match the configured project
+#### Scenario: A revision that changes only an image
+- **WHEN** the document branch changed one image, the note itself is identical on the default branch, and the image differs
+- **THEN** the document is pending
 
-### Requirement: A record that does not belong to the configured project resolves to no state
-A document whose record carries a different project than the configured one, or
-carries none, SHALL resolve to no state rather than to the state that record
-holds. The stored state describes a review on a platform or project this plugin
-is not looking at, and presenting it would assert something about the configured
-project that nothing established.
+#### Scenario: A merged document whose branch was left behind
+- **WHEN** the document branch still exists but every file it changed is identical on the default branch
+- **THEN** the document is published, not pending
 
-Where a document's state cannot be resolved from the remote, the stored record
-SHALL be consulted only if it belongs to the configured project. That fallback
-exists so an imported document reads as published — it has no merge request, so
-the record is the only thing that knows — and it SHALL NOT be extended to a
-record whose project is foreign or unknown, because those are the same
-observation for a different reason.
+#### Scenario: A squash-merged document whose branch was left behind
+- **WHEN** the review was merged by squashing and its branch was not removed
+- **THEN** the document is published, not pending
 
-#### Scenario: An imported document with no merge request
-- **WHEN** a document's record belongs to the configured project and the remote reports no merge request for it, because it was imported rather than submitted
-- **THEN** it resolves to the state its record holds, as it does today
+#### Scenario: A merged document whose branch was removed
+- **WHEN** the document branch no longer exists and the default branch holds the document's path
+- **THEN** the document is published
 
-#### Scenario: A document whose record belongs to another project
-- **WHEN** a document's record carries a project other than the configured one
-- **THEN** it resolves to no state, and no stored state is shown for it
+#### Scenario: A review closed without merging and its branch removed
+- **WHEN** the document branch no longer exists, the default branch has no file whose name derives the document's identity, and the note carries a `doc_id`
+- **THEN** the document is closed
 
-#### Scenario: A document whose record carries no project yet
-- **WHEN** a document's record carries no project and the remote reports no merge request for it on the configured project
-- **THEN** it resolves to no state, rather than to the state the record holds
+#### Scenario: A second cycle that was not accepted
+- **WHEN** a published document's second cycle was closed without merging and its branch removed
+- **THEN** the document reads as published, because the first version is still on the default branch, and it is listed because the note differs from it
+
+#### Scenario: A review closed without merging whose branch was left
+- **WHEN** a review was closed without merging and nobody removed its branch
+- **THEN** the document still reads as pending, which is an accepted limit of deriving state without the platform's API
+
+#### Scenario: Before any fetch
+- **WHEN** no fetch has completed in this vault
+- **THEN** no document has a state and none is placed under "Waiting on reviewers"
+
+### Requirement: One fetch serves every document
+Deriving every document's state SHALL use one fetch and the listings read from
+the fetched copy. It SHALL NOT make one request per document, and a derivation
+SHALL NOT start a network connection by itself.
+
+#### Scenario: Deriving many documents
+- **WHEN** states are derived for a vault holding twenty submitted documents
+- **THEN** one fetch is made and all twenty are derived from the fetched copy
+
+#### Scenario: A fetch that cannot complete
+- **WHEN** the fetch does not succeed
+- **THEN** the states last derived are kept, and the caller is told the refresh failed rather than receiving states derived from partial data
+
+### Requirement: Straight after a successful send the document reads as waiting for review
+After a push to a document branch succeeds, the plugin SHALL record the
+branch's new tip in the fetched copy itself, so the document is derived as
+pending at once without another fetch. A push that fails SHALL change nothing
+in the fetched copy.
+
+#### Scenario: A first submission
+- **WHEN** the author submits a document for the first time and the push succeeds
+- **THEN** the document is derived as pending and Reset is offered, without a fetch
+
+#### Scenario: A new version of a published document
+- **WHEN** the author submits a published document again and the push succeeds
+- **THEN** the document is derived as pending, without a fetch
+
+#### Scenario: A failed push
+- **WHEN** a push fails at any point
+- **THEN** the document's derived state is whatever it was before
+
+### Requirement: A note is matched to its document by path and exact content, with doc_id as an alias
+The plugin SHALL find the document a note belongs to without requiring a `doc_id` in the
+note, in this order: (1) the document at the note's own path on the project, from the
+fetched default branch or the last synced version; (2) the document whose send record
+from this vault touched the note's path; (3) a document whose version known to this
+vault (last synced, default branch, last sent, or its review branch) has the same content
+identifier as the note and sits at a path that no longer exists in the vault. A match in
+(3) SHALL require exact equality of content identifiers and SHALL NOT use similarity. A
+`doc_id` in the note's front matter, valid as a ref part, SHALL take precedence as the
+identity and SHALL NOT be rewritten or removed. When two documents match at the same
+step, the note SHALL match none and SHALL NOT be listed as either.
+
+#### Scenario: Matched by path
+- **WHEN** a note with no `doc_id` sits at a path the fetched default branch holds
+- **THEN** its state is derived for that document
+
+#### Scenario: Matched after a move by content
+- **WHEN** a note sits at a new path and its content identifier equals the last-sent version of a document whose old path no longer exists in the vault
+- **THEN** it resolves to that document, and its state is unchanged by the move
+
+#### Scenario: Ambiguous
+- **WHEN** two absent paths hold the same bytes and one note matches both
+- **THEN** the note resolves to neither
+
+#### Scenario: A legacy doc_id
+- **WHEN** a note carries a valid `doc_id`
+- **THEN** it resolves by that identity, and the property is left in the note
+
+### Requirement: The send record remembers the path the review started from
+This vault's record of the last send for a document (`sent/<id>`) SHALL identify the
+path the note had in that send, readable from the recorded commit itself, so no new
+stored state is needed. A note whose path differs from that recorded path while its
+bytes equal that send's note SHALL be reported as moved.
+
+#### Scenario: Rename during review
+- **WHEN** the author renames a note whose review is open
+- **THEN** the panel shows "Waiting for review" and the moved marker, from the recorded commit's path
+
+#### Scenario: Another vault
+- **WHEN** a second vault has no send record for the document
+- **THEN** it derives state from paths on the project only, and shows no moved marker for a document it never sent

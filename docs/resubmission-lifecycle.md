@@ -1,5 +1,11 @@
 # Resubmission lifecycle: milestones 6, 7, 7a — what shipped, and the bug it fixed
 
+> **SUPERSEDED 2026-10-22 by the change `replace-rest-with-local-git-ssh`.** A document's state is now derived
+> from git, never stored, and the `create`-action bug this file traces went with the REST client. What
+> submit does for each state is in `openspec/specs/doc-authoring/spec.md` and `openspec/specs/submission-tracking/spec.md`
+> once that change is archived, and in the change's design, D5 and D8, until then. Kept as the record of
+> the reasoning.
+
 Background for the three milestones that all touch the same code path:
 `performSubmit` in `plugin/src/doc-authoring/submit-document.ts`, when a
 document already has a frozen `doc_id`.

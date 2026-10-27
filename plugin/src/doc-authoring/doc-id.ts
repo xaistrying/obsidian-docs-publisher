@@ -1,3 +1,5 @@
+import { isValidRefPart } from '../git-publishing/ref-names';
+
 /**
  * Derives the candidate `doc_id` from a note's filename at submit-confirm
  * time, ASCII-folding Vietnamese diacritics and validating the result as
@@ -41,7 +43,9 @@ function isGitRefLegal(value: string): boolean {
 	if (value === '' || value.startsWith('.') || value.endsWith('.lock')) {
 		return false;
 	}
-	return !ILLEGAL_CHARACTERS.test(value);
+	// And git's own rules for a name in a ref, which are stricter than the
+	// filename rule an author sees (`..`, `@{`, control characters, a trailing dot).
+	return !ILLEGAL_CHARACTERS.test(value) && isValidRefPart(value);
 }
 
 /**

@@ -40,6 +40,14 @@ winner. Nobody chose.
 would have been accepted. The space is what refused both files; see §3 for
 the exact rule.
 
+> **AMENDED 2026-10-26 by `panel-by-path-without-doc-id`.** A note no longer carries a `doc_id`
+> property. The identity a first send derives from the filename is the same (`doc/<id>`, the same
+> rules below), but it is remembered by this vault's own send record and by the project's path,
+> not written into the note. A note renamed afterwards keeps the document it belongs to when its
+> exact bytes are unchanged, so these rules bind at the first send, not for the document's life.
+> Wherever this file says "`doc_id`", read "the identity derived from the filename at first send";
+> a note that still carries a `doc_id` from an older version keeps it and is read as an alias.
+
 ## 2. Why a shared filename cannot work
 
 The chain is short and every link is fixed:
@@ -116,7 +124,7 @@ like a document. Three kinds showed up here:
 |---|---|
 | Refuses an import whose ID a vault note already holds | yes, naming the note |
 | Refuses an import whose filename cannot be a git ref | yes |
-| Refuses a submit whose `doc_id` a second vault note holds | yes |
+| Refuses a submit whose older `doc_id` property a second vault note holds | yes |
 | Refuses a name that collides with a document NOT in this vault | **no** |
 | Renames anything on the platform | **no, ever** |
 
