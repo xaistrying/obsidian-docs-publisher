@@ -1,7 +1,7 @@
 {
   "id": "obsidian-docs-publisher",
   "name": "Docs Publisher",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "minAppVersion": "1.5.7",
   "description": "Publish SOP/Runbook documentation to GitLab from Obsidian, using your own SSH key",
   "author": "xaistrying",
