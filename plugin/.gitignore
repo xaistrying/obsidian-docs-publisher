@@ -16,3 +16,6 @@ dist/
 # Plugin data - this vault's submission and import records. Never holds
 # credentials (they are session-only), but local state has no place in git.
 data.json
+
+# What `npm run release` gathers to attach to a release
+release/

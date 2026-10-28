@@ -1,13 +1,14 @@
 {
   "name": "obsidian-docs-publisher",
-  "version": "0.2.0",
+  "version": "1.0.0",
   "description": "Publish SOP documentation to GitLab from Obsidian, over SSH",
   "main": "main.js",
   "scripts": {
     "dev": "node esbuild.config.mjs",
     "typecheck": "tsc --noEmit",
     "test": "vitest run",
-    "build": "tsc --noEmit && node esbuild.config.mjs production"
+    "build": "tsc --noEmit && node esbuild.config.mjs production",
+    "release": "npm run build && node scripts/release.mjs"
   },
   "devDependencies": {
     "@types/node": "^22.20.2",

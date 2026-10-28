@@ -28,24 +28,31 @@ You also need **Git** installed on your computer. If you do not have it, the
 panel tells you, with a **Get Git** button that opens the download page. Install
 it with its default choices, then press **Check again** in the panel.
 
-1. Download these three files from the release page: <RELEASE_URL>
-   - `main.js`
-   - `manifest.json`
-   - `styles.css`
-2. In your vault, create the folder
-   `<vault>/.obsidian/plugins/obsidian-docs-publisher/` and put the three
-   files in it. (`.obsidian` is a hidden folder. If you cannot see it, turn on
-   "show hidden files" in your file browser.)
-3. In Obsidian, open **Settings → Community plugins** and turn community
-   plugins on if they are off.
-4. Under **Installed plugins**, switch on **Docs Publisher**. If it is not
-   listed, restart Obsidian.
-5. Open the plugin's panel with the ribbon icon **Open Docs Publisher**, or
-   run **Open Docs Publisher** from the command palette.
+**The easy way.** Open a terminal (on Windows, **Git Bash**, which came with
+Git) and run:
 
-To update later, replace the three files with the new ones. Do not delete the
-folder — it also holds your settings (see section 9), so you will not have to
-set up again.
+```
+curl -fsSL https://github.com/xaistrying/obsidian-docs-publisher/releases/latest/download/install.sh | bash
+```
+
+It finds your Obsidian vaults (and asks which one if you have several), downloads
+the newest release, checks it, installs it and switches the plugin on. Then, in
+Obsidian, open **Settings → Community plugins**, turn community plugins on if
+they are off, and switch on **Docs Publisher**. Open the panel with the ribbon
+icon **Open Docs Publisher**.
+
+To name the vault yourself, add it at the end: `| bash -s -- "/path/to/vault"`.
+
+**To update later, run the same command again.** It replaces the plugin's three
+files and keeps your settings, so you do not set up again. If the plugin is
+already switched on, switch it off and on once so Obsidian loads the new files.
+To go back to an older release, add `--version v0.1.0` after `bash -s --`.
+
+**By hand.** Download `main.js`, `manifest.json` and `styles.css` from the
+release page, put them in `<vault>/.obsidian/plugins/obsidian-docs-publisher/`
+(`.obsidian` is a hidden folder; turn on "show hidden files" if you cannot see
+it), and switch the plugin on as above. To update, replace the three files; do
+not delete the folder, because it also holds your settings.
 
 ## 2. Set up: five steps, shown in the panel
 
@@ -334,6 +341,17 @@ must follow these rules.
 ## 9. For admins and reviewers
 
 This section uses git vocabulary.
+
+**Publishing a release.** From `plugin/`: bump `version` in `manifest.json` and
+`package.json` and add the version to `versions.json`, then run `npm run release`.
+It builds, refuses a build whose versions disagree, and gathers `main.js`,
+`manifest.json`, `styles.css`, `install.sh` and `SHA256SUMS` in `plugin/release/`.
+On GitHub, create a release tagged `v<version>` and attach every file in that
+folder. The install command above then serves that release to everyone, and
+members update by running it again. The release must be public for the command to
+work without a login; for a private repository a member needs the GitHub CLI
+signed in (`gh`), which the installer falls back to. Install a build you have
+made yourself with `./install.sh /path/to/vault --local`.
 
 **How the plugin works.** There is no token and no API call. The plugin runs the
 `git` and `ssh` programs on the author's computer, over SSH, with the author's
